@@ -538,7 +538,7 @@ Do seu computador, abra **`https://www.<seu-domínio>`** (com cadeado válido):
 
 1. Portal → busca **SQL databases** → **+ Create**.
 2. **Resource group:** `rg-prd-tik-paas-cin-001` · **Database name:** `FIFA2026Tickets`
-3. **Server:** **Create new** → **Server name:** `sql-prd-tk-cin-001` (global!) · **Location:** **Central India** · **Authentication:** **Use SQL authentication** · **Admin login:** `sqladmin` · **Password:** crie forte e 📋 **anote** (rótulo: *Azure SQL admin*).
+3. **Server:** **Create new** → **Server name:** `sql-prd-tk-cin-001` (global!) · **Location:** **Central India** · **Authentication:** **Use SQL authentication** · **Admin login:** `adminsql` · **Password:** crie forte e 📋 **anote** (rótulo: *Azure SQL admin*).
 4. **Compute + storage:** **Configure** → **Basic** (~$5/mês, suficiente para o workshop).
 5. **Networking** (aba): **Connectivity method:** **Public endpoint** · **Allow Azure services... :** **Yes** · **Add current client IP:** **Yes** → **Review + create** → **Create**.
 
@@ -567,7 +567,7 @@ Do seu computador, abra **`https://www.<seu-domínio>`** (com cadeado válido):
 2. **Select new migration scenario:** Source **SQL Server**, Target **Azure SQL Database**, mode **Offline** → **Select**.
 3. **Connect to source SQL Server:** **Server name** `10.30.1.4` (IP privado da VM do SQL) · **Authentication** SQL · login `adminsql` / `Partiunuvem@2026` · marque **Trust server certificate** → **Next**.
 4. **Select databases for migration:** marque **`FIFA2026Tickets`** → **Next**.
-5. **Connect to target Azure SQL Database:** **Server** `sql-prd-tk-cin-001.database.windows.net` · login `adminsql` (ou `migrator`) / a senha → **Next**.
+5. **Connect to target Azure SQL Database:** **Server** `sql-prd-tk-cin-001.database.windows.net` · login `adminsql` / a senha → **Next**.
    > 💡 Se a conexão ao destino falhar, libere no **firewall do Azure SQL** o IP de saída da `vm-data` (Networking → firewall rules), ou confirme **"Allow Azure services"** (Fase 5.1).
 6. **Map source and target databases:** mapeie `FIFA2026Tickets` (origem) → `FIFA2026Tickets` (destino).
 7. ⚠️ **Marque "Migrate Missing schema".** Como o destino está **vazio**, o DMS precisa criar **schema + tabelas + índices + views + procs…** antes de copiar os dados. _(Sem tabelas no destino e sem marcar isso, o wizard **não deixa avançar**.)_
@@ -590,7 +590,7 @@ Com os dados no Azure SQL, atualize o backend para o novo banco (a `vm-data` já
 
 1. `app-prd-tk-bend-cin-001` → **Connection strings** → edite `DefaultConnection`, mude o **Type** para **SQLAzure** e troque o **Value** pela string do Azure SQL:
    ```text
-   Server=sql-prd-tk-cin-001.database.windows.net,1433;Database=FIFA2026Tickets;User Id=sqladmin;Password=<senha-do-Azure-SQL-admin>;Encrypt=true;TrustServerCertificate=false
+   Server=sql-prd-tk-cin-001.database.windows.net,1433;Database=FIFA2026Tickets;User Id=adminsql;Password=<senha-do-Azure-SQL-admin>;Encrypt=true;TrustServerCertificate=false
    ```
    **Apply** (reinicia sozinho).
    > 💡 Note o `TrustServerCertificate=false`: o Azure SQL tem **certificado válido** (diferente do SQL Server da VM, que era self-signed → `true`).
@@ -808,10 +808,10 @@ Ao privatizar, duas tarefas mudam — e isso é **esperado**:
 | `/api/*` proxia, mas backend dá **500** | App Settings erradas, ou `web.config`/`node_modules` não vieram no deploy | Veja **Log stream** (Portal → backend → **Monitoring → Log stream**); confirme as App Settings (3.5); republique se faltou conteúdo |
 | `/api/health/db` dá **ETIMEOUT/ESOCKET** (Fase 3) | VNet Integration/peering não roteia até a `vm-data` | Confirme a subnet delegada `Microsoft.Web/serverFarms` + **Route All** (3.4); peering das VNets `Connected`; NSG do banco libera `1433` de `10.20.0.0/16` |
 | `/api/health/db` dá **ETIMEOUT** (Fase 5, já no Azure SQL) | Firewall do Azure SQL sem "Allow Azure services" | `sql-prd-tk-cin-001` → **Networking** → **Allow Azure services = Yes** |
-| `/api/health/db` dá **ELOGIN** | `User Id`/`Password` da Connection String `DefaultConnection` não batem com o destino | Antes da Fase 5: `adminsql`/`Partiunuvem@2026` (VM). Depois: `sqladmin`/senha do Azure SQL |
+| `/api/health/db` dá **ELOGIN** | `User Id`/`Password` da Connection String `DefaultConnection` não batem com o destino | Antes da Fase 5: `adminsql`/`Partiunuvem@2026` (VM). Depois: `adminsql`/senha do Azure SQL |
 | App Service Migration Assistant **não acha o site** | Rodando fora da VM de origem, ou IIS parado | Instale e rode o assistant **dentro** da `vm-bend`/`vm-fend`; confirme o site no IIS Manager |
 | Mudei App Setting e **nada mudou** | Cache de instância | App Settings reiniciam o app, mas force um **Restart** se preciso. (No App Service **não** existe `iisreset`.) |
-| **DMS** falha ao conectar no source/target (Fase 5) | SHIR não registrado, ou firewall do Azure SQL bloqueia o IP da `vm-data` | Confirme o **nó do SHIR** ✅ no DMS (Integration runtime); libere o IP de saída da `vm-data` no firewall do Azure SQL; logins `db_datareader` (origem) / `sqladmin` (destino) |
+| **DMS** falha ao conectar no source/target (Fase 5) | SHIR não registrado, ou firewall do Azure SQL bloqueia o IP da `vm-data` | Confirme o **nó do SHIR** ✅ no DMS (Integration runtime); libere o IP de saída da `vm-data` no firewall do Azure SQL; logins `db_datareader` (origem) / `adminsql` (destino) |
 | **DMS** — `Next` indisponível ao selecionar tabelas (Fase 5) | Destino vazio e **"Migrate Missing schema"** não marcado | Marque **Migrate Missing schema** (5.4) — sem tabelas no destino, o DMS exige a migração de schema para prosseguir |
 | Domínio customizado **não valida** | Registro `asuid` TXT/CNAME não propagou | `Resolve-DnsName asuid.www.<domínio> -Type TXT -Server 8.8.8.8`; aguarde a propagação e revalide |
 | **Cadastro/login falham só no navegador** ("não foi possível criar a conta" / 500), mas **`curl` funciona** | **CORS:** `FRONTEND_URL` não bate com o `Origin` do navegador — quase sempre **barra `/` no fim** ou o domínio faltando | Ajuste `FRONTEND_URL` para `https://seu-dominio` **sem `/`** (4.6); `curl` engana porque não manda `Origin` |
@@ -833,7 +833,7 @@ Ao privatizar, duas tarefas mudam — e isso é **esperado**:
 |---|---|---|
 | 🔢 | *IP_DB* | IP privado da `vm-data` (`10.30.1.x`) — usado na **Connection String** do backend **até a Fase 5** |
 | 🔐 | *SQL/VM adminsql* | `adminsql` / `Partiunuvem@2026` — origem do banco (VM) |
-| 🔐 | *Azure SQL admin* | `sqladmin` / *(senha que você criou na Fase 5.1)* — destino do banco (PaaS) |
+| 🔐 | *Azure SQL admin* | `adminsql` / *(senha que você criou na Fase 5.1)* — destino do banco (PaaS) |
 | 🔐 | *JWT_SECRET* | a mesma string longa da fase VM |
 | 🌐 | *Backend Web App* | `https://app-prd-tk-bend-cin-001.azurewebsites.net` |
 | 🌐 | *Frontend Web App* | `https://app-prd-tk-fend-cin-001.azurewebsites.net` |
