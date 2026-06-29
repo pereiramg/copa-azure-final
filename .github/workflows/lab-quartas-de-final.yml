@@ -23,7 +23,8 @@ name: Lab Quartas de Final — Identidade dois-mundos (Gateway YARP + CIAM + adm
 #   Vars (migrations): SQL_SERVER, RESOURCE_GROUP
 #   Vars (gateway):    ACR_LOGIN_SERVER, PHASE04_CONTAINERAPP_NAME, PHASE04_RESOURCE_GROUP
 #   Vars (frontend):   FRONTEND_APP_NAME, VITE_CIAM_AUTHORITY, VITE_CIAM_CLIENT_ID,
-#                      GATEWAY_V2_URL, BACKEND_URL, FUNCTION_V2_URL
+#                      GATEWAY_V2_URL, BACKEND_URL, FUNCTION_V2_URL,
+#                      VITE_ADMIN_TENANT_ID, VITE_ADMIN_CLIENT_ID, VITE_ADMIN_SCOPE (opcional)
 
 on:
   workflow_dispatch:
