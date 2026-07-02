@@ -31,9 +31,9 @@ name: Lab A Final — Chatbot MCP (F5) + Flow Visualizer (F6)
 #
 # NOTA (McpServer é INTERNO): o smoke do bloco mcp-server NÃO faz curl público de /health
 # (o ingress é "Limited to Container Apps Environment" — sem endereço público). Valida-se a
-# provisão da revisão via az CLI. O /health via gateway com Bearer é o smoke manual da Fase 1.7.
+# provisão da revisão via az CLI. O /health via gateway com Bearer é o smoke manual da Fase 12.
 #
-# Pré-requisitos no fork (ver docs/runbooks/final-portal-guide.md § Fase 8):
+# Pré-requisitos no fork (ver docs/runbooks/final-portal-guide.md § Fase 10):
 #   Secrets:  AZURE_CREDENTIALS, PHASE05_SQL_CONNECTION_STRING, GEMINI_API_KEY,
 #             GROQ_API_KEY (opc), MISTRAL_API_KEY (opc), GATEWAY_SHARED_SECRET,
 #             PHASE06_SIGNALR_CONNECTION_STRING, AZURE_FRONTEND_PUBLISH_PROFILE
@@ -190,12 +190,12 @@ jobs:
             SECRET_ARGS+=( "mistral-key=${MISTRAL_API_KEY}" ); ENV_ARGS+=( "MISTRAL_API_KEY=secretref:mistral-key" )
           fi
           # X-Gateway-Key (gateway-secret): fecha o P0 de bypass (Story 4.2 / ADE-009). O guia
-          # (Fase 1.3) permite caminho MANUAL (App Setting no Portal) OU este secret do fork —
+          # (Fase 3.3 / 4.2) permite caminho MANUAL (App Setting no Portal) OU este secret do fork —
           # ausência = aluno escolheu o manual → skip com AVISO (não erro), sem sobrescrever.
           if [ -n "${GATEWAY_SHARED_SECRET:-}" ]; then
             SECRET_ARGS+=( "gateway-secret=${GATEWAY_SHARED_SECRET}" ); ENV_ARGS+=( "GATEWAY_SHARED_SECRET=secretref:gateway-secret" )
           else
-            echo "::warning::GATEWAY_SHARED_SECRET não definido como secret do fork — assumindo o caminho MANUAL (App Setting no Portal, guia Fase 1.3). Se você NÃO o configurou manualmente, o X-Gateway-Key ficará desarmado."
+            echo "::warning::GATEWAY_SHARED_SECRET não definido como secret do fork — assumindo o caminho MANUAL (App Setting no Portal, guia Fase 3.3 / 4.2). Se você NÃO o configurou manualmente, o X-Gateway-Key ficará desarmado."
           fi
           # Aplica só os secrets/env-vars presentes.
           az containerapp secret set \
@@ -209,7 +209,7 @@ jobs:
         # O McpServer tem ingress INTERNO (só o gateway no mesmo CAE o alcança) — não há
         # endereço público para o runner sondar /health. Validamos que a revisão ativa
         # provisionou com sucesso. O smoke funcional (tools/list = 7 via gateway com Bearer)
-        # é manual na Fase 1.7 do guia.
+        # é manual na Fase 12 do guia.
         if: ${{ inputs.acao == 'tudo' || inputs.acao == 'mcp-server' }}
         env:
           MCP_APP_NAME: ${{ inputs.mcp_app_name || vars.PHASE05_MCP_APP_NAME }}
@@ -240,7 +240,7 @@ jobs:
       #   Rebuild do Gateway a partir desta branch (lab-a-final) para armar o hardening:
       #   X-Gateway-Key também no cluster mcp-server (ADE-009) + leitura de FlowEventsUrl.
       #   As App Settings (McpServerUrl / FlowEventsUrl / Gateway__AdminSharedSecret) são
-      #   criadas à mão no Portal (guia Fases 1.4 e 7.1) e permanecem.
+      #   criadas à mão no Portal (guia Fase 4.1 e Fase 8) e permanecem.
       #   Origem: deploy-phase-02.yml + smoke fail-closed de lab-quartas-de-final.yml.
       # =========================================================
       - name: '[gateway] Setup .NET'
@@ -323,7 +323,7 @@ jobs:
       #   FlowEvents .NET (Azure.Monitor.Query via Kusto + Microsoft.Azure.SignalR — FlowHub).
       #   Imagem no ACR + App Settings: AzureSignalRConnectionString (secretref),
       #   LogAnalyticsWorkspaceId, FrontendOrigin. Ingress EXTERNO/WebSocket → smoke /health público.
-      #   NÃO recebe GATEWAY_SHARED_SECRET (fora do escopo da ADE-009 Inv 1 — guia Fase 6.4).
+      #   NÃO recebe GATEWAY_SHARED_SECRET (fora do escopo da ADE-009 Inv 1 — guia Fase 7.4).
       #   Origem: deploy-phase-06.yml (job deploy-flow-events).
       # =========================================================
       - name: '[flow-events] Setup .NET'
@@ -477,7 +477,7 @@ jobs:
           # VITE_FUNCTION_V2_URL como interruptor do fluxo v2 → compra some). Sem isto o build
           # passaria verde publicando um front sem login/compra.
           if [ -z "${VITE_CIAM_CLIENT_ID:-}" ] || [ -z "${VITE_FUNCTION_V2_URL:-}" ]; then
-            echo "::error::VITE_CIAM_CLIENT_ID e/ou VITE_FUNCTION_V2_URL vazios — o bundle sairia com login CIAM e/ou compra v2 mortos. Recrie as Variables das Quartas NESTE fork (ver nota de pré-requisito da Fase 8 do guia: docs/runbooks/final-portal-guide.md)."
+            echo "::error::VITE_CIAM_CLIENT_ID e/ou VITE_FUNCTION_V2_URL vazios — o bundle sairia com login CIAM e/ou compra v2 mortos. Recrie as Variables das Quartas NESTE fork (ver nota de pré-requisito da Fase 10 do guia: docs/runbooks/final-portal-guide.md)."
             exit 1
           fi
           npm run build

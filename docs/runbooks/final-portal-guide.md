@@ -1,17 +1,23 @@
-# Guia do Aluno — A Grande Final (F5/F6: Chatbot MCP + Flow Visualizer) do zero
+# Guia do Aluno — A Grande Final (F5/F6: Chatbot MCP + Flow Visualizer + Blindar) do zero
 
-> **O que você vai construir nesta aula:** as duas últimas fases do FIFA 2026 Tickets, criando **do zero** os recursos novos e plugando-os ao ambiente das Quartas:
+> **O que você vai construir nesta aula:** as duas últimas fases do FIFA 2026 Tickets, criando **do zero** os recursos novos e plugando-os ao ambiente das Quartas — e ainda **fechando as chaves em claro no Key Vault** (a missão Blindar):
 > - **F5 — a Voz:** um **McpServer** (7 ferramentas read-only) atrás do gateway YARP + um **chatbot Gemini** que consulta o estado REAL da Copa por conversa natural. A regra de ouro — "o chatbot nunca escreve no banco" — vale **por construção**, não por roteamento.
 > - **F6 — a Visão:** o serviço **FlowEvents** (SignalR + Log Analytics) + o **Flow Visualizer** do frontend, onde uma compra real acende **5 nós** animados, rastreados de ponta a ponta por `correlationId`.
+> - **Blindar — o cofre:** os segredos (SQL, Gemini, SignalR e o segredo do gateway) saem do **texto puro** das App Settings e vão para o **Key Vault que já existe**, lidos por uma **Managed Identity**. E a **observabilidade nível-produção** (App Insights + Log Analytics) que já está no ar passa a ser usada de verdade.
 >
 > **Importante (leia antes de começar):**
-> - **Este lab ASSUME as Quartas no ar** (gateway YARP, identidade CIAM + admin workforce, backend v1, SQL). A Final **ADICIONA** dois microsserviços ao MESMO ambiente — **não** recria o gateway nem a identidade.
+> - **Este lab ASSUME as Quartas no ar** (gateway YARP, identidade CIAM + admin workforce, backend v1, SQL). A Final **ADICIONA** dois microsserviços ao MESMO ambiente e **reconfigura** os existentes para lerem segredos do cofre — **não** recria o gateway, a identidade, o SQL nem o Key Vault.
 > - **Cada aluno cria TUDO no próprio Azure / GitHub**: seus recursos, com **seus próprios nomes**. Os valores deste guia são **genéricos** (`<sufixo>`, `<seu-rg>`, `<gateway-fqdn>`) — preencha os seus na tabela de convenção.
-> - **O fork NÃO é o passo zero.** A infra dos serviços novos é criada **à mão** no Portal (Fases 1–7); o **fork + GitHub Actions é o ÚLTIMO passo de deploy** ([Fase 9](#fase-9--pr-do-lab--rodar-os-acao-na-ordem)).
+> - **O fork NÃO é o passo zero.** A infra dos serviços novos e o cofre são criados/configurados **à mão** no Portal (Fases 1–9); o **fork + GitHub Actions é o ÚLTIMO passo de deploy** ([Fase 11](#fase-11--pr-do-lab--rodar-os-acao-na-ordem)).
 
-> ⚠️ **A regra de ouro do dia:** no F5 o chatbot só tem **sentidos** (7 tools de leitura). Ele **não consegue** executar nenhuma ação — não existe uma ferramenta de escrita para o LLM chamar. Você vai **ver isso ao vivo** na [Fase 10](#fase-10--smokes-e-validação-o-coração-do-lab).
+> ⚠️ **A regra de ouro do dia:** no F5 o chatbot só tem **sentidos** (7 tools de leitura). Ele **não consegue** executar nenhuma ação — não existe uma ferramenta de escrita para o LLM chamar. Você vai **ver isso ao vivo** na [Fase 12](#fase-12--smokes-e-validação-o-coração-do-lab).
 
-> **Referências:** Story [3.3](../stories/3.3.story.md) · [3.4](../stories/3.4.story.md) · [ADE-008 (re-arquitetura da Final)](../architecture/) · [ADE-004 (gateway issuer-agnóstico)](../architecture/) · Guia das Quartas [`quartas-f2-portal-guide.md`](./quartas-f2-portal-guide.md) · Workflow [`lab-a-final.yml`](../../.github/workflows/lab-a-final.yml)
+> 🏷️ **Marcação de cada passo (repare nas etiquetas ao longo do guia):**
+> - **[já existe]** — o recurso já está no ar; você só **usa/liga** (ex.: o Key Vault `kv-dev-tk-cin-001`, o App Insights, o Log Analytics).
+> - **[criar/configurar à mão]** — você cria ou reconfigura no Portal nesta aula.
+> - **[débito residual]** — fica como dívida conhecida (não bloqueia o lab); registrado honestamente.
+
+> **Referências:** Story [3.3](../stories/3.3.story.md) · [3.4](../stories/3.4.story.md) · **[ADE-010 (Managed Identity + Key Vault sobre os recursos existentes + observabilidade)](../architecture/ade-010-managed-identity-keyvault.md)** · [ADE-009 (X-Gateway-Key)](../architecture/ade-009-network-secrets-service-identity.md) · [ADE-008 (re-arquitetura da Final)](../architecture/ade-008-final-decommission-n8n.md) · [ADE-004 (gateway issuer-agnóstico)](../architecture/ade-004-gateway-yarp.md) · Guia das Quartas [`quartas-f2-portal-guide.md`](./quartas-f2-portal-guide.md) · Workflow [`lab-a-final.yml`](../../.github/workflows/lab-a-final.yml)
 
 ---
 
@@ -21,51 +27,26 @@ Há **duas divisões de trabalho** bem distintas — a mesma lógica das Oitavas
 
 | O quê | Como é feito | Onde |
 |---|---|---|
-| **INFRA nova** (Container Apps McpServer/FlowEvents, SignalR, Managed Identity, App Settings novas do gateway) | **À mão, no Portal do Azure** | Portal (Fases 1–7) |
-| **CÓDIGO + FRONTEND** (imagens dos serviços, rebuild do gateway, bundle do front) | **GitHub Actions** (workflow único `Lab A Final`) | Seu fork (Fases 8–9) |
+| **INFRA nova + COFRE** (Container Apps McpServer/FlowEvents, SignalR, Managed Identities, **secrets no Key Vault**, App Settings novas do gateway, migração das chaves em claro) | **À mão, no Portal do Azure** | Portal (Fases 1–9) |
+| **CÓDIGO + FRONTEND** (imagens dos serviços, rebuild do gateway, bundle do front) | **GitHub Actions** (workflow único `Lab A Final`) | Seu fork (Fases 10–11) |
 
 O que muda em relação às Quartas:
 
-| | **Quartas (F2/F3)** | **A Final (F5/F6)** |
+| | **Quartas (F2/F3)** | **A Final (F5/F6 + Blindar)** |
 |---|---|---|
-| Gateway YARP | você criou | **reusado sem mudança de infra** (só rebuild do código p/ pegar o hardening) |
+| Gateway YARP | você criou | **reusado** (rebuild do código p/ o hardening + segredo migrado p/ o cofre) |
 | Identidade CIAM + admin | você criou | reusada |
-| Backend v1 / SQL | reusado | reusado |
+| Backend v1 / SQL | reusado | reusado (segredo do gateway migrado p/ o cofre; SQL-MI é showcase opcional) |
+| **Key Vault** `kv-dev-tk-cin-001` | já existe | **reusado** — passa a guardar as chaves em claro |
 | **McpServer** (7 tools read-only) | — | **NOVO** — Container App **interno**, atrás do gateway |
 | **Chatbot Gemini** | — | **NOVO** — no frontend, chave no **proxy server-side** |
 | **FlowEvents** (SignalR + Kusto) | — | **NOVO** — Container App + Azure SignalR + Managed Identity |
 | **Flow Visualizer** (`/flow`) | — | **NOVO** — 5 nós animados por `correlationId` |
+| **Observabilidade** (App Insights + Log Analytics) | já existe | **reusada de verdade** — tracing por `correlationId`, workbook, alertas |
 
-```
-        VOCÊ (Portal Azure — à mão)                       SEU FORK (GitHub Actions)
-        ───────────────────────────                       ─────────────────────────
-  ┌──────────────────────────────────────────────┐
-  │  Reusa das Quartas:                           │
-  │    ACR · Container Apps Environment (CAE)      │
-  │    Gateway YARP · SQL · Frontend Web App       │
-  │                                                │
-  │  CRIA novo para a Final:                       │
-  │    F5 → Container App McpServer (INTERNO)       │ ──┐  (você cria vazio)
-  │    F6 → Container App FlowEvents (externo)      │   │
-  │         + Azure SignalR (Free) + Managed Ident.│   │
-  │  + App Settings novas no gateway               │   │
-  └──────────────────────────────────────────────┘   │
-                                                       ▼
-                     ┌───────────────────────────────────────────────┐
-                     │  Workflow ÚNICO "Lab A Final" (lab-a-final.yml) │
-                     │  input `acao`:                                 │
-                     │    mcp-server → build+deploy do McpServer       │
-                     │    gateway    → rebuild do gateway (hardening)   │
-                     │    flow-events→ build+deploy do FlowEvents        │
-                     │    frontend   → chatbot + /flow embutidos        │
-                     │    tudo       → mcp-server → gateway →           │
-                     │                 flow-events → frontend           │
-                     └───────────────────────────────────────────────┘
-```
+A regra de ouro da arquitetura: **o Portal cria/configura; os Actions só publicam código.** Nenhum recurso Azure é criado pelo workflow.
 
-A regra de ouro da arquitetura: **o Portal cria os recursos vazios; os Actions só publicam código.** Nenhum recurso Azure é criado pelo workflow.
-
-> 🟢 **Retro-compatibilidade:** nada das Quartas deixa de funcionar. A compra continua a mesma; a Final só **acrescenta** observação (chatbot que lê + visualizador que mostra). A notificação pós-compra passou a ser **inline** (dentro da Function Consumer), sem orquestração externa.
+> 🟢 **Retro-compatibilidade (regra dura):** nada das Quartas deixa de funcionar. A compra continua a mesma; a Final só **acrescenta** observação (chatbot que lê + visualizador que mostra) e **move segredos para o cofre sem downtime** (o valor não muda, só o lar). A notificação pós-compra é **inline** (dentro da Function Consumer), sem orquestração externa.
 
 > 🔵 **Fluxo em runtime (F5):** front → `POST {gateway}/mcp` (Bearer CIAM) → gateway injeta `X-Entra-OID` + `X-Gateway-Key` → **McpServer** (`tools/list`, `tools/call`) → `SELECT` no SQL. A chave Gemini fica no **proxy** (`{gateway}/llm/gemini/...`), nunca no browser.
 > 🔵 **Fluxo em runtime (F6):** compra atravessa Gateway YARP → Function Entry → Service Bus → Function Consumer → SQL; cada hop emite um trace com `correlationId`; o **FlowEvents** lê os traces (Kusto) e empurra por **SignalR** para a rota `/flow`, acendendo os 5 nós.
@@ -84,16 +65,21 @@ Reuse os recursos das Quartas e crie os **novos** da Final. Anote os **seus** va
 | Container App (gateway) | `ca-gateway-<sufixo>` (reuse) | ____________ |
 | FQDN do gateway | `<gateway-fqdn>` (das Quartas) | ____________ |
 | Frontend Web App | `<seu-frontend>` → `https://<seu-frontend>.azurewebsites.net` (reuse) | ____________ |
+| Backend v1 (Web App) | `<seu-backend>` (reuse das Quartas) | ____________ |
+| Functions F1 (Function App) | `<suas-functions>` (reuse) | ____________ |
 | SQL Server / DB | `<seu-sql-server>` / `FIFA2026Tickets` (reuse) | ____________ |
+| **Key Vault** | `kv-dev-tk-cin-001` **[já existe]** — RBAC habilitado `[confirmar no Portal]` | ____________ |
+| **Managed Identity (leitura do KV)** | `id-fifa2026-kv-reader` — **NOVO, User-Assigned** `[nome sugerido; confirme]` | ____________ |
 | **Container App (McpServer)** | `ca-mcp-<sufixo>` — **NOVO, ingress interno** | ____________ |
 | FQDN interno do McpServer | `<mcp-fqdn>` (gerado; termina em `.internal.<domínio-do-cae>`) | ____________ |
 | **Container App (FlowEvents)** | `ca-flow-<sufixo>` — **NOVO** | ____________ |
 | FQDN do FlowEvents | `<flow-fqdn>` (gerado) | ____________ |
 | **Azure SignalR** | `signalr-<sufixo>` — **NOVO, tier Free** | ____________ |
-| **Log Analytics Workspace** | reuse o das fases anteriores (App Insights) | ____________ |
+| **Log Analytics Workspace** | `log-dev-tk-cin-001` **[já existe]** (o do App Insights) | ____________ |
 | Workspace ID (GUID) do Log Analytics | `<workspace-id>` | ____________ |
+| **App Insights** | `appi-dev-tk-cin-001` **[já existe]** | ____________ |
 
-> 💡 **Um único segredo de gateway (`X-Gateway-Key`):** você já gerou um `Gateway__AdminSharedSecret` nas Quartas. **Reuse exatamente o mesmo valor** aqui — ele agora também protege o hop gateway→McpServer (ver [Fase 3](#fase-3--app-settings-do-gateway-mcpserverurl--trava-x-gateway-key)). Se não tiver anotado, gere um novo (`openssl rand -hex 24`) e reaplique em TODOS os serviços confiáveis.
+> 💡 **Um único segredo de gateway (`X-Gateway-Key`):** você já gerou um `Gateway__AdminSharedSecret` nas Quartas. Nesta aula ele vira **um único secret no Key Vault** (`gateway-admin-shared-secret`), referenciado por **todos** os lados — quem injeta (gateway) e quem valida (backend, Functions, McpServer). Se não tiver anotado o valor, gere um novo (`openssl rand -hex 24`) e use-o como valor do secret no cofre.
 
 ---
 
@@ -101,15 +87,17 @@ Reuse os recursos das Quartas e crie os **novos** da Final. Anote os **seus** va
 
 - [ ] Ambiente das **Quartas no ar**: gateway YARP responde `GET /health` = 200; login CIAM funciona; compra v2 grava em `purchases`.
 - [ ] ACR (`cr<sufixo>`) e o Container Apps Environment (`cae-<sufixo>`) existentes.
+- [ ] **Key Vault `kv-dev-tk-cin-001` [já existe]** e você consegue abri-lo no Portal. *(Você dará a si mesmo acesso de dados na [Fase 1](#fase-1--cofre-e-identidade-managed-identity--key-vault).)*
 - [ ] **Chave Gemini** pronta (`GEMINI_API_KEY`) — você a gera na [Fase 0](#fase-0--conta-google--chave-gemini-ai-studio) (conta Google dedicada + AI Studio). Modelo do lab: **`gemini-2.5-flash`** (ver [Apêndice B](#apêndice-b--modelo-gemini-real-vs-comentário)).
 - [ ] O valor do `Gateway__AdminSharedSecret` das Quartas anotado (ou um novo gerado).
-- [ ] Fork NOVO do repo do evento com **TODAS as branches** (a branch do lab é `lab-a-final`; ver [Fase 9](#fase-9--pr-do-lab--rodar-os-acao-na-ordem)).
+- [ ] A **connection string do SQL** (`FIFA2026Tickets`) e a **connection string do SignalR** (você cria o SignalR na [Fase 5](#fase-5--azure-signalr-free-service-mode-default)) — vão para o cofre.
+- [ ] Fork NOVO do repo do evento com **TODAS as branches** (a branch do lab é `lab-a-final`; ver [Fase 11](#fase-11--pr-do-lab--rodar-os-acao-na-ordem)).
 
 ---
 
 ## Fase 0 — Conta Google + chave Gemini (AI Studio)
 
-O chatbot da Final (F5) usa o **Google Gemini** para decidir qual das 7 tools chamar. A chave (`GEMINI_API_KEY`) é **parte do provisionamento** — você a gera **agora**, antes de subir qualquer serviço. Ela **nunca** entra no código: vai como **Secret do fork** na [Fase 8](#fase-8--fork-novo--variablessecrets-consolidados) e é usada **só pelo proxy server-side** (McpServer).
+O chatbot da Final (F5) usa o **Google Gemini** para decidir qual das 7 tools chamar. A chave (`GEMINI_API_KEY`) é **parte do provisionamento** — você a gera **agora**, antes de subir qualquer serviço. Ela **nunca** entra no código: vira um **secret no Key Vault** ([Fase 1](#fase-1--cofre-e-identidade-managed-identity--key-vault)) e é usada **só pelo proxy server-side** (McpServer).
 
 ### 0.1 — Criar a conta Google dedicada ao lab
 
@@ -128,17 +116,72 @@ O chatbot da Final (F5) usa o **Google Gemini** para decidir qual das 7 tools ch
 
 > 🔒 **A chave é server-side:** o `GEMINI_API_KEY` será usado **apenas pelo PROXY** (McpServer, `/llm/gemini/...`) — **nunca** no browser. O frontend só conhece a URL do proxy (`VITE_LLM_PROXY_URL` = o gateway).
 
-✅ **Checkpoint:** você tem um `GEMINI_API_KEY` guardado **fora do código** (vai como Secret do fork na [Fase 8](#fase-8--fork-novo--variablessecrets-consolidados)) e sabe que o modelo do lab é **`gemini-2.5-flash`** (ver [Apêndice B](#apêndice-b--modelo-gemini-real-vs-comentário)).
+✅ **Checkpoint:** você tem um `GEMINI_API_KEY` guardado **fora do código** (vira um secret no cofre na [Fase 1](#fase-1--cofre-e-identidade-managed-identity--key-vault)) e sabe que o modelo do lab é **`gemini-2.5-flash`** (ver [Apêndice B](#apêndice-b--modelo-gemini-real-vs-comentário)).
 
 ---
 
-## Fase 1 — Container App do McpServer (ingress INTERNO)
+## Fase 1 — Cofre e identidade: Managed Identity + Key Vault
+
+**A missão Blindar começa aqui.** Em vez de colar as chaves **em claro** nas App Settings (como um lab ingênuo faria), você as guarda no **Key Vault que já existe** (`kv-dev-tk-cin-001`) e deixa uma **Managed Identity** lê-las. **Nada é recriado** — é 100% configuração sobre o que existe. Base técnica: **ADE-010**.
+
+> 🧠 **O modelo (leia antes):** uma **User-Assigned Managed Identity compartilhada, só-leitura**, anexada a todos os apps que leem o cofre. Por que compartilhada (e não uma system-assigned por app)? **Um** único role assignment na vida toda; e ela **sobrevive** quando você recria o McpServer/FlowEvents à mão (uma system-assigned morre com o app → novo objectId → regrant obrigatório). Como **ler segredo é uma operação uniforme**, a granularidade por-app não compra segurança aqui. *(O SQL é a exceção — lá se usa a system-assigned por-app; ver [Apêndice E](#apêndice-e--sql-via-managed-identity-showcaseopcional).)*
+
+### 1.1 — Dar a VOCÊ acesso de DADOS ao cofre **[configurar à mão]**
+
+1. Portal → **Key Vault `kv-dev-tk-cin-001` → Access control (IAM) → `+ Add → Add role assignment`**.
+2. **Role** = **`Key Vault Secrets Officer`** → **Members** = **sua própria conta** → **Review + assign**.
+
+> ⚠️ **Gotcha #1 (KV-RBAC):** ser **Owner** do recurso **NÃO** dá acesso ao *data-plane* (ler/criar segredo). Sem a role `Key Vault Secrets Officer` em você, o blade **Secrets** nega **403** mesmo sendo Owner. Owner (management plane) ≠ Secrets Officer (data plane). É o erro nº1 de quem nunca migrou um KV com RBAC.
+> `[confirmar no Portal]` que o KV está com **RBAC habilitado** (`enableRbacAuthorization = true` — *access policies* inativas). Se estiver em access-policy, o caminho de IAM abaixo muda.
+
+### 1.2 — Criar a Managed Identity compartilhada de leitura **[criar à mão]**
+
+1. Portal → **Managed Identities → `+ Create`**.
+2. **Subscription/RG** = os seus · **Region** = a do CAE · **Name** = **`id-fifa2026-kv-reader`** `[nome sugerido; o owner/facilitador confirma]` → **Review + create → Create**.
+3. Na **Overview** da MI, anote o **Resource ID** (você vai precisar dele para o backend/Functions na [Fase 9](#fase-9--migração-sem-downtime-backend--functions-das-quartas--key-vault)).
+
+### 1.3 — Dar à MI a role de leitura de segredo (escopo = o cofre) **[configurar à mão]**
+
+1. Portal → **Key Vault `kv-dev-tk-cin-001` → Access control (IAM) → `+ Add → Add role assignment`**.
+2. **Role** = **`Key Vault Secrets User`** (só **lê** o valor do segredo — não list/set/delete) → **Next**.
+3. **Assign access to** = **Managed identity** → **`+ Select members`** → selecione **`id-fifa2026-kv-reader`** → **Review + assign**.
+4. **Escopo** = **este KV** (o próprio recurso — menor escopo possível, não a subscription/RG).
+
+> ⚠️ A atribuição de role **NÃO é instantânea** — a propagação leva **alguns minutos**. **Valide antes** de trocar qualquer App Setting.
+> 💡 **CLI equivalente** (se o principal não aparecer no seletor do Portal): `az role assignment create --role "Key Vault Secrets User" --assignee-object-id <objectId-da-MI> --assignee-principal-type ServicePrincipal --scope <resourceId-do-KV>`.
+
+### 1.4 — Criar os secrets no cofre (valor **byte-a-byte**)
+
+**[criar à mão]** Para **cada** chave que hoje iria em claro, crie um secret no KV com o **valor idêntico** ao atual. **Esta fase troca o *lar* do segredo, não o *valor*** — é isso que garante o **zero-downtime** depois.
+
+Portal → **Key Vault `kv-dev-tk-cin-001` → Objects → Secrets → `+ Generate/Import`** → **Upload options = Manual** → **Name** + **Secret value** → **Create**. Repita para cada linha:
+
+| Secret no KV | Valor (origem de hoje) | Quem vai referenciar | App Setting / env var no destino |
+|---|---|---|---|
+| **`gateway-admin-shared-secret`** | o `X-Gateway-Key` das Quartas (hoje **plaintext** no gateway) | **gateway** (injeta) **+ backend + Functions + McpServer** (validam) | Gateway: `Gateway__AdminSharedSecret` · demais: `GATEWAY_SHARED_SECRET` |
+| **`gemini-api-key`** | `GEMINI_API_KEY` (da [Fase 0](#fase-0--conta-google--chave-gemini-ai-studio)) | McpServer | `GEMINI_API_KEY` |
+| **`sql-connection-string`** | connection string do SQL (hoje com **senha**) | McpServer **+** Functions | `SqlConnectionString` |
+| `groq-api-key` / `mistral-api-key` *(opcionais)* | chaves de fallback do chatbot | McpServer | `GROQ_API_KEY` / `MISTRAL_API_KEY` |
+
+> 📌 **Ainda faltam dois** — você os cria quando o recurso de origem existir:
+> - **`azure-signalr-connection-string`** → logo após criar o SignalR na [Fase 5](#fase-5--azure-signalr-free-service-mode-default).
+> - **`appinsights-connection-string`** → na [Fase 13](#fase-13--observabilidade-nível-produção-us0) (observabilidade).
+>
+> 🟢 **Risco ZERO nesta fase:** ninguém referencia esses secrets ainda. Você só está **populando o cofre**. Nada quebra aqui.
+
+> ⭐ **Ganho estrutural (não é só higiene):** o `gateway-admin-shared-secret` é **UM** secret referenciado pelos **dois** lados — quem **injeta** o `X-Gateway-Key` (o gateway) e quem **valida** (backend, Functions, McpServer). Hoje são App Settings **independentes** que podem **divergir por engano** — e divergir = **401 em toda request** → as Quartas caem. Com **um secret só** no cofre, a igualdade vira **garantia estrutural**, não disciplina manual. O cofre **remove uma classe inteira de falha**.
+
+✅ **Checkpoint:** MI `id-fifa2026-kv-reader` criada; role **`Key Vault Secrets User`** atribuída no KV (propagação confirmada); secrets `gateway-admin-shared-secret`, `gemini-api-key`, `sql-connection-string` criados com **valor byte-idêntico** ao atual; **ninguém referencia ainda**.
+
+---
+
+## Fase 2 — Container App do McpServer (ingress INTERNO)
 
 O McpServer é um microsserviço .NET 8 que expõe o endpoint **`/mcp`** (Streamable HTTP, JSON-RPC 2.0 pelo SDK oficial). Ele fica **atrás do gateway** — o browser **nunca** o chama direto. O gateway valida o Bearer Entra, injeta `X-Entra-OID` (identidade) e `X-Gateway-Key` (prova de origem), e roteia `/mcp` e `/llm/**` para ele.
 
-Nesta fase você cria o Container App **vazio** (imagem placeholder). A imagem real vem pelo Actions na [Fase 9](#fase-9--pr-do-lab--rodar-os-acao-na-ordem).
+Nesta fase você cria o Container App **vazio** (imagem placeholder). A imagem real vem pelo Actions na [Fase 11](#fase-11--pr-do-lab--rodar-os-acao-na-ordem).
 
-### 1.1 Criar o Container App (Basics → Container → Ingress)
+### 2.1 Criar o Container App (Basics → Container → Ingress)
 
 Tudo no **[portal.azure.com](https://portal.azure.com)**, na `<sua-subscription>` / `<seu-rg>`.
 
@@ -168,7 +211,7 @@ Tudo no **[portal.azure.com](https://portal.azure.com)**, na `<sua-subscription>
    | **Target port** | **`8080`** | obrigatório (`Dockerfile`: `EXPOSE 8080` + `ASPNETCORE_URLS=http://+:8080`); qualquer outra porta = **502** |
 
 5. **Review + create → Create → Go to resource**.
-6. Na **Overview**, copie a **Application Url** — é o seu `<mcp-fqdn>` (um host `*.internal.<região>.azurecontainerapps.io`). É o valor da App Setting `McpServerUrl` do gateway ([Fase 3](#fase-3--app-settings-do-gateway-mcpserverurl--trava-x-gateway-key)).
+6. Na **Overview**, copie a **Application Url** — é o seu `<mcp-fqdn>` (um host `*.internal.<região>.azurecontainerapps.io`). É o valor da App Setting `McpServerUrl` do gateway ([Fase 4](#fase-4--app-settings-do-gateway-mcpserverurl--x-gateway-key-via-key-vault)).
 
 > 🔒 **Ingress INTERNO é o ponto de segurança do bloco:** o McpServer não tem endereço público. Só o gateway (mesmo CAE) fala com ele — e só com o `X-Gateway-Key` correto. Um `curl` externo direto no McpServer nem chega.
 
@@ -176,76 +219,110 @@ Tudo no **[portal.azure.com](https://portal.azure.com)**, na `<sua-subscription>
 
 ---
 
-## Fase 2 — Conectar o ACR + App Settings do McpServer
+## Fase 3 — ACR + App Settings do McpServer (via Key Vault)
 
-### 2.1 Conectar o ACR
+Em vez de colar `SqlConnectionString`, `GEMINI_API_KEY` e `GATEWAY_SHARED_SECRET` **em claro**, você aponta os secrets do Container App para o **Key Vault** (secrets criados na [Fase 1.4](#14--criar-os-secrets-no-cofre-valor-byte-a-byte)), resolvidos pela **Managed Identity compartilhada**.
+
+### 3.1 Conectar o ACR
 
 1. No Container App `ca-mcp-<sufixo>` → **Settings → Registries → `+ Add`**.
 2. **Registry** = `cr<sufixo>.azurecr.io` · **Authentication** = **Admin Credentials** → **Save**.
 
-### 2.2 App Settings do McpServer
+### 3.2 Anexar a Managed Identity de leitura **PRIMEIRO** **[configurar à mão]**
 
-O McpServer precisa da connection string do SQL, da chave Gemini (que o **proxy** injeta server-side) e do segredo do gateway. No Container App: **Application → Containers → `Edit and deploy`** → selecione o container → aba **Environment variables** → adicione (Source = **Manual entry**, ou **Reference a secret** para os sensíveis) → **Save → Create**:
+1. No `ca-mcp-<sufixo>` → **Settings → Identity → User assigned → `+ Add`** → selecione **`id-fifa2026-kv-reader`** → **Add**.
 
-| App Setting | Valor | Papel |
+> ⚠️ **Ordem obrigatória (landmine P-4):** a MI tem de estar **anexada ANTES** de criar o secret KV-backed. Se você criar o secret apontando para a identidade antes de anexá-la, o ARM **rejeita** o `identityref` — e a falha pode acontecer **depois** de já mexer no app.
+
+### 3.3 Criar os secrets do Container App como **Key Vault reference** **[configurar à mão]**
+
+No `ca-mcp-<sufixo>` → **Settings → Secrets → `+ Add`** — para cada um, escolha o tipo **"Key Vault reference"**:
+
+| Secret do Container App | Key Vault Secret URI | Identity |
 |---|---|---|
-| `SqlConnectionString` | connection string ADO.NET do `FIFA2026Tickets` | as 7 tools fazem `SELECT` parametrizado (Dapper) |
-| `GEMINI_API_KEY` | sua chave Gemini | injetada pelo **proxy** (`/llm/gemini/...`) — NUNCA no bundle |
-| `GATEWAY_SHARED_SECRET` | **mesmo** valor do `Gateway__AdminSharedSecret` das Quartas | trava `X-Gateway-Key`: só aceita requests que passaram pelo gateway |
+| `sql-conn` | `https://kv-dev-tk-cin-001.vault.azure.net/secrets/sql-connection-string` | `id-fifa2026-kv-reader` |
+| `gemini-key` | `https://kv-dev-tk-cin-001.vault.azure.net/secrets/gemini-api-key` | `id-fifa2026-kv-reader` |
+| `gateway-secret` | `https://kv-dev-tk-cin-001.vault.azure.net/secrets/gateway-admin-shared-secret` | `id-fifa2026-kv-reader` |
 
-> ⚠️ **Dois caminhos para o `GATEWAY_SHARED_SECRET` — escolha UM:** ou você define aqui **manual** (App Setting no Portal), ou deixa o job `mcp-server` do `lab-a-final.yml` aplicá-lo como *secretref* a partir do Secret `GATEWAY_SHARED_SECRET` do fork ([Fase 8](#fase-8--fork-novo--variablessecrets-consolidados)). Não faça os dois pela metade — use **um** dos dois.
+Depois, em **Application → Containers → `Edit and deploy` → Environment variables**, aponte cada env var para o secret (**Source = Reference a secret**):
+
+| App Setting | Aponta para (secretref) | Papel |
+|---|---|---|
+| `SqlConnectionString` | `sql-conn` | as 7 tools fazem `SELECT` parametrizado (Dapper) |
+| `GEMINI_API_KEY` | `gemini-key` | injetada pelo **proxy** (`/llm/gemini/...`) — NUNCA no bundle |
+| `GATEWAY_SHARED_SECRET` | `gateway-secret` | trava `X-Gateway-Key`: só aceita requests que passaram pelo gateway |
+
+→ **Save → Create**.
+
+> 💡 **CLI equivalente** (ADE-010 D4a): `az containerapp secret set -n ca-mcp-<sufixo> -g <seu-rg> --secrets "gemini-key=keyvaultref:https://kv-dev-tk-cin-001.vault.azure.net/secrets/gemini-api-key,identityref:<resourceId-da-id-fifa2026-kv-reader>"`. Repita para `sql-conn` e `gateway-secret`. **A beleza:** o env var **continua** `secretref:` — zero churn; o que muda é o **secret do CA**, de valor inline para KV-backed.
+
+> ⚠️ **Manual (cofre) × workflow (inline) — escolha UM caminho para os sensíveis do McpServer:** o job `mcp-server` do `lab-a-final.yml` também sabe aplicar `SqlConnectionString`/`GEMINI_API_KEY`/`GATEWAY_SHARED_SECRET` como *secretref* **inline**, a partir dos Secrets do fork ([Fase 10](#fase-10--fork-novo--variablessecrets-consolidados)). Se você **blindou pelo cofre** aqui, **não** deixe o workflow reaplicar esses três (ele sobrescreveria o KV-backed por inline); rode o `mcp-server` uma vez para trocar a **imagem** e **re-aponte** os três para o cofre depois, **[débito residual]** ou mantenha-os só manuais. Para o lab, o caminho **cofre** é o "blindado"; o **inline** é o "simples".
 
 > 🔒 **Chave Gemini no server-side:** o frontend só conhece a URL do **proxy** (`VITE_LLM_PROXY_URL` = o gateway). O McpServer expõe `/llm/{provider}/{*path}`, injeta a `GEMINI_API_KEY` como header e encaminha ao endpoint oficial. Assim a key **nunca** vai para o browser — o próprio workflow tem um guard que falha se qualquer key vazar no bundle.
-> 🟢 **Opcionais (fallback/portabilidade):** se quiser oferecer outros provedores, o McpServer também lê `GROQ_API_KEY` e `MISTRAL_API_KEY`. Para o lab, só a Gemini basta.
+> 🟢 **Opcionais (fallback/portabilidade):** se quiser oferecer outros provedores, o McpServer também lê `GROQ_API_KEY` e `MISTRAL_API_KEY` (crie os secrets `groq-api-key`/`mistral-api-key` no cofre se for usar). Para o lab, só a Gemini basta.
 
-✅ **Checkpoint:** ACR conectado em **Registries**; McpServer com `SqlConnectionString`, `GEMINI_API_KEY` e (se optou pelo caminho manual) `GATEWAY_SHARED_SECRET` nas Environment variables.
+✅ **Checkpoint:** ACR conectado em **Registries**; MI `id-fifa2026-kv-reader` **anexada** ao McpServer; secrets `sql-conn`/`gemini-key`/`gateway-secret` como **Key Vault reference**; env vars `SqlConnectionString`/`GEMINI_API_KEY`/`GATEWAY_SHARED_SECRET` apontando por `secretref`.
 
 ---
 
-## Fase 3 — App Settings do gateway (`McpServerUrl` + trava `X-Gateway-Key`)
+## Fase 4 — App Settings do gateway (`McpServerUrl` + X-Gateway-Key via Key Vault)
 
-O gateway já roteia para o McpServer — o `McpServerDestinationConfigFilter` **já existe** no `Program.cs` (Story 2.5, reusado sem mudança). Você só precisa dar a URL real e garantir o segredo. No Container App do **gateway** (`ca-gateway-<sufixo>`) → **Application → Containers → `Edit and deploy` → Environment variables**:
+O gateway já roteia para o McpServer — o `McpServerDestinationConfigFilter` **já existe** no `Program.cs` (Story 2.5, reusado). Você dá a URL real do McpServer **e migra o segredo do gateway (hoje em claro) para o cofre** — o gateway é um recurso **existente** das Quartas, então esta é a **primeira migração in-place**.
+
+### 4.1 `McpServerUrl` **[configurar à mão]**
+
+No Container App do **gateway** (`ca-gateway-<sufixo>`) → **Application → Containers → `Edit and deploy` → Environment variables**:
 
 | App Setting | Valor | Papel |
 |---|---|---|
-| `McpServerUrl` | `https://<mcp-fqdn>` (Application Url da [Fase 1.1](#11-criar-o-container-app-basics--container--ingress)) | o filtro sobrescreve a destination do cluster `mcp-server` |
-| `Gateway__AdminSharedSecret` | **mesmo** valor da [Fase 2.2](#22-app-settings-do-mcpserver) (já configurado nas Quartas) | injetado como `X-Gateway-Key` nos clusters confiáveis (`backend-v1`, `functions-f1`, **`mcp-server`**) |
+| `McpServerUrl` | `https://<mcp-fqdn>` (Application Url da [Fase 2](#fase-2--container-app-do-mcpserver-ingress-interno)) | o filtro sobrescreve a destination do cluster `mcp-server` |
 
-> 🔒 **O P0 que a Final fecha:** a partir do hardening (Story 4.2 / ADE-009), o gateway injeta `X-Gateway-Key` também no cluster `mcp-server`. Um `curl` forjando `X-Entra-OID` direto no McpServer **não tem** o segredo e é rejeitado (401); via gateway, a request carrega o segredo real. Por isso é preciso **rebuildar o gateway** a partir da branch `lab-a-final` (`acao=gateway`, [Fase 9](#fase-9--pr-do-lab--rodar-os-acao-na-ordem)) — a imagem das Quartas ainda não tinha o `mcp-server` no conjunto confiável.
-> 🔒 **Duplo underscore:** `Gateway:AdminSharedSecret` na config .NET vira `Gateway__AdminSharedSecret` em env var. Vazio no repo = injeção desligada (retro-compat com labs sem gateway).
+### 4.2 Migrar o `Gateway__AdminSharedSecret` para o cofre (in-place, sem downtime)
 
-> 🔵 **Roteamento e cache (só entendimento, nada a configurar):** o gateway roteia `/mcp` → cluster `mcp-server` e `/llm/{**}` → cluster `mcp-server` (o proxy de LLM que injeta a chave). Requisições `POST` **não são cacheadas** (o fix de cache separou o cache de `GET` das chamadas MCP/LLM). O cache de borda (30s) roda **pós-autenticação** (hardening da Story 4.4): um HIT só é servido depois que o JWT é validado.
-> 🔵 **Identidade propagada (idem):** o gateway extrai o claim `oid` do token CIAM e injeta `X-Entra-OID` na request ao McpServer. As tools **leem** esse header apenas para **logging mascarado** — **nunca** revalidam o JWT (o gateway é o guardião único). É por isso que o McpServer pode ficar atrás do gateway sem reimplementar autenticação.
+**[configurar à mão]** O gateway é um Container App — mesma forma da [Fase 3.2/3.3](#fase-3--acr--app-settings-do-mcpserver-via-key-vault):
 
-✅ **Checkpoint:** gateway com `McpServerUrl = https://<mcp-fqdn>` e `Gateway__AdminSharedSecret` presente (mesmo valor do McpServer). *(A trava só fica ativa depois do rebuild `acao=gateway` na Fase 9.)*
+1. **Anexe** a MI: `ca-gateway-<sufixo>` → **Settings → Identity → User assigned → `+ Add`** → `id-fifa2026-kv-reader`.
+2. **Secret KV-backed:** **Settings → Secrets → `+ Add`** → `gateway-secret` (se ainda não existir no gateway) → tipo **Key Vault reference** → URI `https://kv-dev-tk-cin-001.vault.azure.net/secrets/gateway-admin-shared-secret` → Identity `id-fifa2026-kv-reader`.
+3. **Env var:** `Gateway__AdminSharedSecret` → **Source = Reference a secret** → `gateway-secret`.
+
+> 🟢 **Zero-downtime:** o **valor** resolvido é **idêntico** ao plaintext atual (você copiou byte-a-byte na Fase 1.4). O gateway não percebe a troca — só passou a ler do cofre. **GATE antes de seguir (Container App):** a **nova revisão provisiona Healthy** (não fica *Degraded*/falha ao subir) + `GET /health` = **200** + o smoke retro-compat das Quartas (login CIAM + compra v2) funciona. *(O badge "Key Vault Reference · Resolved" é da tela de Configuration do **App Service/Functions** — [Fase 9](#fase-9--migração-sem-downtime-backend--functions-das-quartas--key-vault); em **Container Apps** a falha de resolução aparece como revisão que **não provisiona**, não como badge.)*
+
+> 🔒 **O P0 que a Final fecha:** a partir do hardening (Story 4.2 / ADE-009), o gateway injeta `X-Gateway-Key` também no cluster `mcp-server`. Um `curl` forjando `X-Entra-OID` direto no McpServer **não tem** o segredo e é rejeitado (401); via gateway, a request carrega o segredo real. Por isso é preciso **rebuildar o gateway** a partir da branch `lab-a-final` (`acao=gateway`, [Fase 11](#fase-11--pr-do-lab--rodar-os-acao-na-ordem)) — a imagem das Quartas ainda não tinha o `mcp-server` no conjunto confiável.
+> 🔒 **Duplo underscore:** `Gateway:AdminSharedSecret` na config .NET vira `Gateway__AdminSharedSecret` em env var. Vazio = injeção desligada (retro-compat com labs sem gateway).
+
+> 🔵 **Roteamento e cache (só entendimento):** o gateway roteia `/mcp` e `/llm/{**}` → cluster `mcp-server`. Requisições `POST` **não são cacheadas**. O cache de borda (30s) roda **pós-autenticação** (hardening 4.4): um HIT só é servido depois que o JWT é validado.
+> 🔵 **Identidade propagada (idem):** o gateway extrai o claim `oid` do token CIAM e injeta `X-Entra-OID`. As tools **leem** esse header só para **logging mascarado** — **nunca** revalidam o JWT (o gateway é o guardião único).
+
+✅ **Checkpoint:** gateway com `McpServerUrl = https://<mcp-fqdn>` e `Gateway__AdminSharedSecret` resolvendo do **cofre** (nova revisão **Healthy** + `/health` 200), com o smoke das Quartas OK. *(A trava `X-Gateway-Key` no `mcp-server` só fica ativa depois do rebuild `acao=gateway` na Fase 11.)*
 
 ---
 
-## Fase 4 — Azure SignalR (Free, Service Mode Default)
+## Fase 5 — Azure SignalR (Free, Service Mode Default)
 
-O FlowEvents empurra os eventos dos 5 nós para o browser via WebSocket, hospedando um **FlowHub** SignalR. Crie o serviço SignalR primeiro — a connection string dele alimenta o FlowEvents.
+O FlowEvents empurra os eventos dos 5 nós para o browser via WebSocket, hospedando um **FlowHub** SignalR. Crie o serviço SignalR primeiro — a connection string dele vira um **secret no cofre** que alimenta o FlowEvents.
 
 1. Portal → **SignalR → `+ Create`**.
 2. **Basics:**
 
    | Campo | Valor | Por quê |
    |---|---|---|
-   | **Resource name** | `signalr-<sufixo>` | vira o segredo `PHASE06_SIGNALR_CONNECTION_STRING` do fork |
+   | **Resource name** | `signalr-<sufixo>` | fonte do secret `azure-signalr-connection-string` |
    | **Region** | a **mesma** do CAE | proximidade com o FlowEvents |
    | **Pricing tier** | **Free** (Free_F1) | 20 conexões simultâneas — suficiente para o workshop |
 
 3. **Review + create → Create → Go to resource**.
 4. Em **Settings → Service Mode**, confirme **`Default`** (⚠️ **NÃO** `Serverless`) — o `FlowHub` é hospedado pelo próprio serviço FlowEvents (.NET, `AddAzureSignalR`), que exige o modo **Default**.
 5. Em **Settings → CORS**, garanta que o **origin do frontend** (`https://<seu-frontend>.azurewebsites.net`) está permitido (o WebSocket do SignalR usa credentials — **não** pode ser `*`).
-6. Em **Keys**, copie a **Connection String** — vira o segredo `PHASE06_SIGNALR_CONNECTION_STRING` do fork ([Fase 8](#fase-8--fork-novo--variablessecrets-consolidados)).
+6. Em **Keys**, copie a **Connection String**.
+7. **[criar à mão]** Volte ao **Key Vault `kv-dev-tk-cin-001` → Secrets → `+ Generate/Import`** e crie o secret **`azure-signalr-connection-string`** com esse valor (o pendente da [Fase 1.4](#14--criar-os-secrets-no-cofre-valor-byte-a-byte)).
 
 > 💡 IaC de referência (não obrigatório aplicar): [`infra/phase-06/signalr.bicep`](../../infra/phase-06/signalr.bicep) declara exatamente esse recurso (Free_F1, ServiceMode=Default, CORS restrito).
 
-✅ **Checkpoint:** SignalR `signalr-<sufixo>` criado, **tier Free**, **Service Mode = Default**, **CORS** com o origin do front, e a **Connection String** anotada.
+✅ **Checkpoint:** SignalR `signalr-<sufixo>` criado, **tier Free**, **Service Mode = Default**, **CORS** com o origin do front, e o secret **`azure-signalr-connection-string`** criado no cofre.
 
 ---
 
-## Fase 5 — Container App do FlowEvents (ingress externo + WebSocket) + ACR
+## Fase 6 — Container App do FlowEvents (ingress externo + WebSocket)
 
 O FlowEvents é um microsserviço .NET 8 que consulta os traces via Kusto (Log Analytics) e empurra os eventos por SignalR. Diferente do McpServer, ele é **externo** — o front conecta o WebSocket a ele (via gateway). Crie o Container App vazio; a imagem real vem pelo Actions.
 
@@ -277,47 +354,54 @@ O FlowEvents é um microsserviço .NET 8 que consulta os traces via Kusto (Log A
 
 ---
 
-## Fase 6 — Managed Identity + Log Analytics Reader + App Settings do FlowEvents
+## Fase 7 — Managed Identity + Log Analytics Reader + App Settings do FlowEvents
 
-O FlowEvents consulta os traces via Kusto usando uma **Managed Identity** — sem chave, sem senha.
+O FlowEvents tem **duas** identidades — e isso ilustra o modelo: a **UA compartilhada** lê o **Key Vault** (segredos), e a **system-assigned própria** lê o **Log Analytics** (telemetria). Planos distintos: "quem lê o cofre" ≠ "quem lê os traces".
 
-### 6.1 Ligar a Managed Identity (System assigned)
+### 7.1 Ligar a Managed Identity **System-assigned** (para o Log Analytics) **[configurar à mão]**
 
 1. No `ca-flow-<sufixo>` → **Settings → Identity → System assigned** → **Status = On** → **Save**.
 
-### 6.2 Dar a role Log Analytics Reader (IAM)
+### 7.2 Anexar a UA compartilhada (para o Key Vault) **[configurar à mão]**
 
-1. Vá ao **Log Analytics Workspace** (o que recebe a telemetria do App Insights) → **Access control (IAM) → `+ Add → Add role assignment`**.
+1. No `ca-flow-<sufixo>` → **Settings → Identity → User assigned → `+ Add`** → `id-fifa2026-kv-reader` → **Add**.
+
+### 7.3 Dar a role **Log Analytics Reader** à system-assigned (IAM) **[configurar à mão]**
+
+1. Vá ao **Log Analytics Workspace** `log-dev-tk-cin-001` **[já existe]** → **Access control (IAM) → `+ Add → Add role assignment`**.
 2. **Role** = **`Log Analytics Reader`** → **Next**.
-3. **Assign access to** = **Managed identity** → **`+ Select members`** → selecione a identidade do `ca-flow-<sufixo>` → **Select** → **Review + assign**.
-4. Anote o **Workspace ID** (GUID) do Log Analytics (**Overview** do workspace) → vira `PHASE06_LOG_ANALYTICS_WORKSPACE_ID` ([Fase 8](#fase-8--fork-novo--variablessecrets-consolidados)).
+3. **Assign access to** = **Managed identity** → **`+ Select members`** → selecione a identidade **system-assigned** do `ca-flow-<sufixo>` → **Select** → **Review + assign**.
+4. Anote o **Workspace ID** (GUID) do Log Analytics (**Overview** do workspace) → vira `PHASE06_LOG_ANALYTICS_WORKSPACE_ID` ([Fase 10](#fase-10--fork-novo--variablessecrets-consolidados)).
 
 > ⚠️ Sem o papel **Log Analytics Reader**, o `LogsQueryClient` recebe **403** e os nós nunca acendem.
+> 🧠 **A amarração da aula:** a MI que lê o **Log Analytics** (`Log Analytics Reader`) é **irmã** da MI que lê o **Key Vault** (`Key Vault Secrets User`, Fase 1). Uma identidade gerenciada com uma role *Reader* lendo um recurso gerenciado, **sem segredo**. **Segurança e observabilidade são a mesma disciplina, contada duas vezes.**
 
-### 6.3 App Settings do FlowEvents
+### 7.4 App Settings do FlowEvents (SignalR via Key Vault) **[configurar à mão]**
 
-No `ca-flow-<sufixo>` → **Application → Containers → `Edit and deploy` → Environment variables**:
+**Secret KV-backed:** `ca-flow-<sufixo>` → **Settings → Secrets → `+ Add`** → `azure-signalr-conn` → tipo **Key Vault reference** → URI `https://kv-dev-tk-cin-001.vault.azure.net/secrets/azure-signalr-connection-string` → Identity `id-fifa2026-kv-reader`.
+
+Depois, em **Application → Containers → `Edit and deploy` → Environment variables**:
 
 | App Setting | Valor | Papel |
 |---|---|---|
-| `AzureSignalRConnectionString` | connection string do SignalR ([Fase 4](#fase-4--azure-signalr-free-service-mode-default)) | hospeda o FlowHub (secretref) |
-| `LogAnalyticsWorkspaceId` | `<workspace-id>` (Fase 6.2) | qual workspace consultar (Kusto) |
+| `AzureSignalRConnectionString` | **secretref** → `azure-signalr-conn` (Key Vault) | hospeda o FlowHub |
+| `LogAnalyticsWorkspaceId` | `<workspace-id>` (Fase 7.3) | qual workspace consultar (Kusto) |
 | `FrontendOrigin` | `https://<seu-frontend>.azurewebsites.net` | CORS do SignalR (credentials → não pode ser `*`) |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` *(opcional)* | connection string do App Insights | telemetria de borda (no-op se ausente) |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` *(opcional; ver [Fase 13](#fase-13--observabilidade-nível-produção-us0))* | secretref → `appinsights-conn` (Key Vault) | telemetria de borda (no-op se ausente) |
 
-> 🔒 **Nota de escopo (não confundir com o F5):** o cluster `flow-events` **NÃO** recebe o `X-Gateway-Key` (fica fora do escopo da ADE-009 Inv 1). Portanto **não** configure `GATEWAY_SHARED_SECRET` no FlowEvents — diferente do McpServer, que precisa dele.
+> 🔒 **Nota de escopo (não confundir com o F5):** o cluster `flow-events` **NÃO** recebe o `X-Gateway-Key` (fica fora do escopo da ADE-009 Inv 1). Portanto **não** configure `GATEWAY_SHARED_SECRET` no FlowEvents — diferente do McpServer.
 
-✅ **Checkpoint:** MI **System assigned = On** no `ca-flow-<sufixo>`, role **Log Analytics Reader** atribuída no workspace, **Workspace ID** anotado e as App Settings `AzureSignalRConnectionString` + `LogAnalyticsWorkspaceId` + `FrontendOrigin` presentes.
+✅ **Checkpoint:** MI **System-assigned = On** + **UA `id-fifa2026-kv-reader` anexada**; role **Log Analytics Reader** atribuída à system-assigned no workspace; **Workspace ID** anotado; `AzureSignalRConnectionString` resolvendo do **cofre**, `LogAnalyticsWorkspaceId` + `FrontendOrigin` presentes.
 
 ---
 
-## Fase 7 — App Setting do gateway (`FlowEventsUrl`)
+## Fase 8 — App Setting do gateway (`FlowEventsUrl`)
 
 O gateway já roteia FlowEvents — o `FlowEventsDestinationConfigFilter` **já existe** (Story 2.6, reusado). Só falta a URL real. No gateway `ca-gateway-<sufixo>` → **Environment variables**:
 
 | App Setting | Valor | Papel |
 |---|---|---|
-| `FlowEventsUrl` | `https://<flow-fqdn>` ([Fase 5](#fase-5--container-app-do-flowevents-ingress-externo--websocket--acr)) | o filtro sobrescreve a destination do cluster `flow-events` |
+| `FlowEventsUrl` | `https://<flow-fqdn>` ([Fase 6](#fase-6--container-app-do-flowevents-ingress-externo--websocket)) | o filtro sobrescreve a destination do cluster `flow-events` |
 
 O gateway expõe duas rotas para o front:
 - `/flow-events/api/{**}` → API do FlowEvents (`/api/flow/recent`, `/{id}`, `/{id}/replay`);
@@ -325,13 +409,53 @@ O gateway expõe duas rotas para o front:
 
 > 🔵 O gateway continua o **NÓ ZERO**: injeta `X-Correlation-ID` (transform global) também nas requests ao FlowEvents.
 
-✅ **Checkpoint:** gateway com `FlowEventsUrl = https://<flow-fqdn>`. *(Assim como o `McpServerUrl`, passa a ser lido pela imagem após o rebuild `acao=gateway` da Fase 9.)*
+✅ **Checkpoint:** gateway com `FlowEventsUrl = https://<flow-fqdn>`. *(Como o `McpServerUrl`, passa a ser lido pela imagem após o rebuild `acao=gateway` da Fase 11.)*
 
 ---
 
-## Fase 8 — Fork novo + Variables/Secrets consolidados
+## Fase 9 — Migração sem downtime: backend + Functions das Quartas → Key Vault
 
-Toda a infra acima foi criada **à mão**. Agora vem a parte do fork. No **seu fork** → **Settings → Secrets and variables → Actions**. Os **nomes** são **fixos** (iguais para todos); os **valores** são os **seus** (placeholders da convenção).
+O gateway já teve o segredo migrado ([Fase 4.2](#42-migrar-o-gateway__adminsharedsecret-para-o-cofre-in-place-sem-downtime)). Faltam os **outros recursos existentes** que **validam** o `X-Gateway-Key`: o **backend v1** e as **Functions**. Hoje eles guardam o `GATEWAY_SHARED_SECRET` fora do cofre; vamos fechá-lo no KV **in-place, sem derrubar as Quartas**. Base: **ADE-010 (Ordem de migração)**.
+
+> ⚠️ **Forma DIFERENTE do Container App:** backend (App Service) e Functions (Function App) **não** usam `secretref`. A Key Vault reference é o **valor do próprio App Setting**:
+> `GATEWAY_SHARED_SECRET = @Microsoft.KeyVault(SecretUri=https://kv-dev-tk-cin-001.vault.azure.net/secrets/gateway-admin-shared-secret/)`
+
+### 9.1 Ordem in-place, **um recurso por vez** (repetir p/ backend e p/ Functions) **[configurar à mão]**
+
+1. **Anexar** a UA compartilhada: recurso → **Identity → User assigned → `+ Add`** → `id-fifa2026-kv-reader`.
+2. **Apontar a identidade que resolve a reference (landmine P-3):** por padrão a reference tenta a **system-assigned**. Para usar a UA compartilhada, **setar `keyVaultReferenceIdentity`** = Resource ID da `id-fifa2026-kv-reader`. O Portal **não** expõe isso na tela de Configuration → use a CLI:
+   - Backend (Web App): `az webapp update -n <seu-backend> -g <seu-rg> --set keyVaultReferenceIdentity=<resourceId-da-UA-MI>`
+   - Functions: `az functionapp update -n <suas-functions> -g <seu-rg> --set keyVaultReferenceIdentity=<resourceId-da-UA-MI>`
+3. **Trocar o valor do App Setting** `GATEWAY_SHARED_SECRET` para `@Microsoft.KeyVault(SecretUri=.../gateway-admin-shared-secret/)` (dispara **restart** do app — segundos).
+4. **GATE de validação (não avance sem ✅):** Portal → **Configuration** → o setting mostra **"Key Vault Reference"** com status **Resolved** (verde) + smoke retro-compat das Quartas: **login CIAM + compra v2** funcionam; `POST` sem token → **401**.
+5. Só então repita para o **próximo** recurso. **Sem big-bang** — um de cada vez.
+
+> ⚠️ **Esquecer o `keyVaultReferenceIdentity`** = a reference tenta a system-assigned (talvez ausente) → **não resolve** → o App Setting entrega a **string literal** `@Microsoft.KeyVault(...)` ao app → quebra. É por isso que o **status `Resolved` é o gate**.
+
+> ⭐ **Agora a igualdade é estrutural:** gateway, backend, Functions **e** McpServer referenciam **o mesmo** secret `gateway-admin-shared-secret`. Não dá mais para um lado divergir do outro por engano.
+
+### 9.2 Pontos onde um erro **derruba as Quartas** (vigie)
+
+| # | Risco | Mitigação |
+|---|---|---|
+| **P-1** | valor divergente do shared secret → **401 em toda request** | **um** secret referenciado por todos; valor **byte-idêntico** na migração |
+| **P-2** | typo no `sql-connection-string` → 500 nas rotas de compra/consulta | copiar exato; validar McpServer/Functions **antes** de seguir |
+| **P-3** | `keyVaultReferenceIdentity` esquecido → reference não resolve → string literal | setar **antes**; exigir status **Resolved** |
+| **P-4** | trocar o secret KV-backed do Container App **antes** de anexar a MI → ARM rejeita | anexar MI **primeiro** (Fases 3.2 / 4.2 / 7.2) |
+| **P-5** | **rotação** do shared secret **não é atômica** entre apps → janela de 401 | rotação = **manutenção planejada** (restart coordenado dos dois lados), nunca casual |
+| **P-6** | **rede do KV** — se `kv-dev-tk-cin-001` tiver firewall/`publicNetworkAccess: Disabled`, os apps não enxergam o cofre | `[confirmar no Portal]` o networking do KV **antes**; provavelmente público+RBAC (default) |
+
+> 🔙 **Reversão (se um gate falhar):** volte o App Setting ao valor **inline plaintext** anterior (que você guardou na Fase 1.4) → o app volta ao estado pré-migração. Como é **um recurso por vez**, o blast radius de um erro é **um** serviço, não o sistema.
+
+> **[débito residual]** O **backend v1 ainda usa senha no SQL** (o `database.js` não foi convertido para MI). A senha do SQL **sai do claro** (vai para o cofre — `sql-connection-string`), mas **ainda existe** até o SQL-MI (o "próximo nível", [Apêndice E](#apêndice-e--sql-via-managed-identity-showcaseopcional)). Sair do plaintext já é o ganho maior; eliminar a senha é showcase.
+
+✅ **Checkpoint:** backend e Functions com `GATEWAY_SHARED_SECRET` resolvendo do **cofre** (status **Resolved**), cada um validado com o smoke das Quartas; **zero** valor de shared secret em claro remanescente; os 4 lados (gateway/backend/Functions/McpServer) apontando para o **mesmo** secret.
+
+---
+
+## Fase 10 — Fork novo + Variables/Secrets consolidados
+
+Toda a infra e o cofre acima foram criados **à mão**. Agora vem a parte do fork. No **seu fork** → **Settings → Secrets and variables → Actions**. Os **nomes** são **fixos** (iguais para todos); os **valores** são os **seus** (placeholders da convenção).
 
 ### Variables
 
@@ -351,6 +475,8 @@ Toda a infra acima foi criada **à mão**. Agora vem a parte do fork. No **seu f
 | `VITE_GEMINI_MODEL` *(opcional)* | `gemini-2.5-flash` | frontend (override; default do código já é `gemini-2.5-flash`) |
 | `VITE_FLOW_EVENTS_BASE_URL` | `https://<gateway-fqdn>/flow-events` | frontend (rota `/flow`) |
 
+> 🔁 **Aliases (não duplique):** `VITE_GATEWAY_V2_URL` e `GATEWAY_V2_URL` são o **mesmo valor** — o workflow lê `vars.VITE_GATEWAY_V2_URL || vars.GATEWAY_V2_URL`. Basta setar **uma** das duas. O mesmo vale para `VITE_FUNCTION_V2_URL`/`FUNCTION_V2_URL` (ver a nota de pré-requisito das Variables herdadas das Quartas, abaixo).
+
 > 📌 **Modelo real:** o runtime do `gemini.ts` usa **`gemini-2.5-flash`** (o comentário de cabeçalho do arquivo ainda cita `2.0-flash` — inconsistência conhecida e inofensiva; ver [Apêndice B](#apêndice-b--modelo-gemini-real-vs-comentário)). Não precisa mexer no código.
 
 ### Secrets
@@ -358,24 +484,30 @@ Toda a infra acima foi criada **à mão**. Agora vem a parte do fork. No **seu f
 | Nome EXATO | Conteúdo | Usada em (ação) |
 |---|---|---|
 | `AZURE_CREDENTIALS` | JSON do Service Principal com acesso ao RG | mcp-server · gateway · flow-events |
-| `PHASE05_SQL_CONNECTION_STRING` | connection string ADO.NET do `FIFA2026Tickets` | mcp-server |
-| `GEMINI_API_KEY` | sua chave Gemini | mcp-server (proxy server-side) |
+| `PHASE05_SQL_CONNECTION_STRING` | connection string ADO.NET do `FIFA2026Tickets` | mcp-server *(ver nota do cofre)* |
+| `GEMINI_API_KEY` | sua chave Gemini | mcp-server *(ver nota do cofre)* |
 | `GROQ_API_KEY` / `MISTRAL_API_KEY` *(opcionais)* | chaves de fallback | mcp-server |
-| `GATEWAY_SHARED_SECRET` | **mesmo** valor do `Gateway__AdminSharedSecret` (gateway + McpServer) — o job `mcp-server` aplica como *secretref* no McpServer (equivale ao App Setting manual da [Fase 2.2](#22-app-settings-do-mcpserver)) | mcp-server (trava X-Gateway-Key) |
-| `PHASE06_SIGNALR_CONNECTION_STRING` | connection string do Azure SignalR | flow-events |
+| `GATEWAY_SHARED_SECRET` | **mesmo** valor do `gateway-admin-shared-secret` | mcp-server *(ver nota do cofre)* |
+| `PHASE06_SIGNALR_CONNECTION_STRING` | connection string do Azure SignalR | flow-events *(ver nota do cofre)* |
 | `AZURE_FRONTEND_PUBLISH_PROFILE` | publish profile do `<seu-frontend>` (SCM Basic Auth On **antes** de capturar) | frontend |
 
-> ⚠️ **Pré-requisito — recrie as Variables/Secrets das Quartas NESTE fork novo (o build do frontend reusa o MESMO Web App).** A Final **acrescenta** o chatbot e a rota `/flow` ao mesmo bundle das Quartas — ela **não** recria o front. Como a [Fase 9](#fase-9--pr-do-lab--rodar-os-acao-na-ordem) manda **criar um fork NOVO** e as Variables/Secrets **não migram entre forks**, você precisa **criar também neste fork novo** — copiando os valores do seu fork das Quartas — as seguintes Variables que o job `frontend` injeta além das listadas acima: `VITE_CIAM_AUTHORITY`, `VITE_CIAM_CLIENT_ID`, `VITE_ADMIN_TENANT_ID`, `VITE_ADMIN_CLIENT_ID`, `VITE_ADMIN_SCOPE` (login CIAM + admin workforce), `GATEWAY_V2_URL`, `BACKEND_URL`, `FUNCTION_V2_URL` (gateway/backend/compra v2). **Se você não recriá-las aqui, o build passa verde mas publica um bundle com login CIAM e compra v2 mortos.** (O workflow aceita tanto o nome das Quartas quanto o prefixado da Final, ex.: `GATEWAY_V2_URL` **ou** `VITE_GATEWAY_V2_URL`; `FUNCTION_V2_URL` **ou** `VITE_FUNCTION_V2_URL`.)
+> ⚠️ **Cofre × workflow (leia com atenção — evita build vermelho):** se você **blindou os sensíveis pelo Key Vault** (Fases 3/4/7), o job que os aplica *inline* **sobrescreveria** o KV-backed. **Mas dois Secrets do fork são OBRIGATÓRIOS mesmo no caminho cofre** — o job aborta (`exit 1`) se estiverem vazios:
+> - **`PHASE05_SQL_CONNECTION_STRING`** (job `mcp-server`) e **`PHASE06_SIGNALR_CONNECTION_STRING`** (job `flow-events`) → **EXCEÇÃO: mantenha SEMPRE populados**. Deixá-los vazios = **build vermelho** em `acao=mcp-server`/`flow-events`. Caminho cofre: mantenha o Secret preenchido, **rode o `acao`**, e **depois re-aponte** o secret do Container App (`sql-conn` / `azure-signalr-conn`) para a **Key Vault reference** (como nas Fases 3.3 / 7.4 / 11.2).
+> - **`GEMINI_API_KEY`** e **`GATEWAY_SHARED_SECRET`** (job `mcp-server`) → **condicionais** (o job só os aplica se presentes; ausência = **aviso**, não erro). Caminho cofre: pode deixá-los **vazios/ausentes** no fork e manter os secrets `gemini-key`/`gateway-secret` como Key Vault reference (o job só troca a **imagem**). Caminho inline: preencha-os.
+>
+> Os Secrets do fork continuam **necessários** para o que **não** é KV-backed. Marque sua escolha por segredo. **[débito residual]** consolidar cofre × inline num único caminho é trabalho futuro.
 
-✅ **Checkpoint:** as 13 Variables da Final + as 8 Variables herdadas das Quartas e os 8 Secrets criados no fork, com os nomes EXATOS acima. *(O job `frontend` tem um fail-fast que aborta se `VITE_CIAM_CLIENT_ID` ou `VITE_FUNCTION_V2_URL` estiverem vazios.)*
+> ⚠️ **Pré-requisito — recrie as Variables/Secrets das Quartas NESTE fork novo (o build do frontend reusa o MESMO Web App).** A Final **acrescenta** o chatbot e a rota `/flow` ao mesmo bundle das Quartas — ela **não** recria o front. Como a [Fase 11](#fase-11--pr-do-lab--rodar-os-acao-na-ordem) manda **criar um fork NOVO** e as Variables/Secrets **não migram entre forks**, você precisa **criar também neste fork novo** — copiando os valores do seu fork das Quartas — as seguintes Variables que o job `frontend` injeta além das listadas acima: `VITE_CIAM_AUTHORITY`, `VITE_CIAM_CLIENT_ID`, `VITE_ADMIN_TENANT_ID`, `VITE_ADMIN_CLIENT_ID`, `VITE_ADMIN_SCOPE` (login CIAM + admin workforce), `GATEWAY_V2_URL`, `BACKEND_URL`, `FUNCTION_V2_URL` (gateway/backend/compra v2). **Se você não recriá-las aqui, o build passa verde mas publica um bundle com login CIAM e compra v2 mortos.** (O workflow aceita tanto o nome das Quartas quanto o prefixado da Final, ex.: `GATEWAY_V2_URL` **ou** `VITE_GATEWAY_V2_URL`; `FUNCTION_V2_URL` **ou** `VITE_FUNCTION_V2_URL`.)
+
+✅ **Checkpoint:** as 13 Variables da Final + as 8 Variables herdadas das Quartas e os Secrets criados no fork, com os nomes EXATOS acima, e sua escolha **cofre × inline** marcada por segredo. *(O job `frontend` tem um fail-fast que aborta se `VITE_CIAM_CLIENT_ID` ou `VITE_FUNCTION_V2_URL` estiverem vazios.)*
 
 ---
 
-## Fase 9 — PR do lab + rodar os `acao` na ordem
+## Fase 11 — PR do lab + rodar os `acao` na ordem
 
-Este é o **último bloco de deploy**: o Actions só **constrói e publica** imagens/código. A infra já existe (Fases 1–7).
+Este é o **último bloco de deploy**: o Actions só **constrói e publica** imagens/código. A infra e o cofre já existem (Fases 1–9).
 
-### 9.1 Preparar o fork (tudo pela web do GitHub)
+### 11.1 Preparar o fork (tudo pela web do GitHub)
 
 A branch do lab no repositório do evento (org **TFTEC**) chama-se **`lab-a-final`** — traz o workflow `lab-a-final.yml` + o código do F5/F6 (McpServer só-sentidos, FlowEvents 5 nós).
 
@@ -384,30 +516,30 @@ A branch do lab no repositório do evento (org **TFTEC**) chama-se **`lab-a-fina
 
 > 🖱️ **Disparo manual apenas:** o workflow só tem `workflow_dispatch` — nada roda até você clicar em **Run workflow** e escolher a ação. Antes do `frontend`, garanta **SCM Basic Auth `On`** no Web App do front e capture o publish profile **depois** disso.
 
-### 9.2 Rodar o workflow — nesta ordem
+### 11.2 Rodar o workflow — nesta ordem
 
-Sempre em **Actions → "Lab A Final" → Run workflow → branch `main`** (já com o workflow após o merge da 9.1), variando o `acao`. A ordem (a mesma do `tudo`) é **`mcp-server` → `gateway` → `flow-events` → `frontend`**:
+Sempre em **Actions → "Lab A Final" → Run workflow → branch `main`** (já com o workflow após o merge da 11.1), variando o `acao`. A ordem (a mesma do `tudo`) é **`mcp-server` → `gateway` → `flow-events` → `frontend`**:
 
-1. **`acao = mcp-server`** — `dotnet build/test` do McpServer, build & push da imagem no ACR (`cr<sufixo>.azurecr.io/mcp-server:<sha>`), `az containerapp update --image` (troca o placeholder) e aplica os App Settings sensíveis como secrets (`SqlConnectionString`, `GEMINI_API_KEY` e — se você optou pelo caminho do fork — `GATEWAY_SHARED_SECRET`; `GROQ`/`MISTRAL` só se presentes).
-   > **O que esperar no log:** como o ingress do McpServer é **interno** (sem endereço público), o workflow **não** faz `curl /health` — ele confirma via `az` que a revisão ativa provisionou (`provisioningState = Provisioned`, `runningState = Running`). O smoke funcional (`tools/list` = 7 via gateway) é o passo manual da [Fase 10](#fase-10--smokes-e-validação-o-coração-do-lab).
-2. **`acao = gateway`** — **rebuild do gateway** a partir de `lab-a-final` para pegar o hardening (`X-Gateway-Key` no cluster `mcp-server` + leitura de `FlowEventsUrl`). Troca a imagem do gateway; suas App Settings das Fases 3 e 7 permanecem.
+1. **`acao = mcp-server`** — `dotnet build/test` do McpServer, build & push da imagem no ACR (`cr<sufixo>.azurecr.io/mcp-server:<sha>`), `az containerapp update --image` (troca o placeholder) e — se você optou pelo caminho **inline** — aplica os App Settings sensíveis como secrets. Se você **blindou pelo cofre** (Fase 3), confirme depois que os secrets `sql-conn`/`gemini-key`/`gateway-secret` continuam **Key Vault reference**.
+   > **O que esperar no log:** como o ingress do McpServer é **interno** (sem endereço público), o workflow **não** faz `curl /health` — ele confirma via `az` que a revisão ativa provisionou. O smoke funcional (`tools/list` = 7 via gateway) é o passo manual da [Fase 12](#fase-12--smokes-e-validação-o-coração-do-lab).
+2. **`acao = gateway`** — **rebuild do gateway** a partir de `lab-a-final` para pegar o hardening (`X-Gateway-Key` no cluster `mcp-server` + leitura de `FlowEventsUrl`). Troca a imagem; suas App Settings (incluindo a Key Vault reference da Fase 4) permanecem.
    > **O que esperar no log:** step **"[gateway] Smoke test"** → `POST /purchase` sem token = **401** (fail-closed) + `GET /health` = **200**.
-3. **`acao = flow-events`** — `dotnet build/test` do FlowEvents, build & push da imagem (`cr<sufixo>.azurecr.io/flow-events:<sha>`), `az containerapp update --image` + aplica `AzureSignalRConnectionString` (secretref), `LogAnalyticsWorkspaceId`, `FrontendOrigin`.
+3. **`acao = flow-events`** — `dotnet build/test` do FlowEvents, build & push da imagem (`cr<sufixo>.azurecr.io/flow-events:<sha>`), `az containerapp update --image` + (se inline) aplica `AzureSignalRConnectionString`, `LogAnalyticsWorkspaceId`, `FrontendOrigin`.
    > **O que esperar no log:** step **"[flow-events] Smoke test"** → `GET /health` com `.status == "healthy"` (ingress externo, então há `curl` público).
 4. **`acao = frontend`** — `npm ci` + `npm run lint` + `vite build` (chatbot **e** rota `/flow` embutidos, com todas as `VITE_*`) + deploy no Web App.
    > **O que esperar no log:** step **"[frontend] Guard"** → `Guard OK — nenhuma key de LLM no bundle`. Se alguma key de LLM aparecer no bundle, o job **falha** de propósito (a key deve ficar só no proxy server-side).
 
 > 🧩 **Origem dos blocos (reuso, não invenção):** `mcp-server` ← `deploy-phase-05.yml`; `gateway` ← `deploy-phase-02.yml` (é onde vive o deploy do Gateway YARP) + smoke fail-closed do `lab-quartas-de-final.yml`; `flow-events` ← `deploy-phase-06.yml`; `frontend` ← fusão dos jobs de front do phase-05 (chatbot + guard) e phase-06 (rota `/flow`); seletor `acao` ← `lab-quartas-de-final.yml`.
 
-✅ **Checkpoint:** quatro jobs verdes na ordem `mcp-server → gateway → flow-events → frontend` (ou um `tudo`); revisões ativas apontando para as imagens `:<sha>` (não mais o placeholder); frontend publicado com chatbot + `/flow`.
+✅ **Checkpoint:** quatro jobs verdes na ordem `mcp-server → gateway → flow-events → frontend` (ou um `tudo`); revisões ativas apontando para as imagens `:<sha>`; frontend publicado com chatbot + `/flow`.
 
 ---
 
-## Fase 10 — Smokes e validação (o coração do lab)
+## Fase 12 — Smokes e validação (o coração do lab)
 
 Com tudo no ar, prove que o lab funciona — e viva o momento didático central (a regra de ouro ao vivo + os 5 nós).
 
-### 10.1 Smoke do McpServer (tools/list = 7)
+### 12.1 Smoke do McpServer (tools/list = 7)
 
 ```bash
 GW="<gateway-fqdn>"
@@ -437,7 +569,7 @@ As **7 tools** que devem aparecer (todas read-only):
 
 ✅ **Checkpoint (AC-2/AC-8):** `tools/list` = **7 tools, todas `readOnly: true`**; `POST /mcp` sem `X-Cache: HIT`; McpServer com ingress **interno** (não responde por URL pública).
 
-### 10.2 Chatbot: 3 perguntas em linguagem natural
+### 12.2 Chatbot: 3 perguntas em linguagem natural
 
 Abra o portal e o **chatbot**. Ele descobre as 7 tools via `tools/list` e deixa o **Gemini** decidir qual chamar (function calling, modo `AUTO`). Faça pelo menos **3** perguntas e observe a tool escolhida:
 
@@ -451,7 +583,7 @@ Abra o portal e o **chatbot**. Ele descobre as 7 tools via `tools/list` e deixa 
 
 ✅ **Checkpoint (AC-3):** ≥3 das 7 tools demonstradas em conversa natural, com dados reais do SQL.
 
-### 10.3 A regra de ouro AO VIVO (o momento central do F5)
+### 12.3 A regra de ouro AO VIVO (o momento central do F5)
 
 Este é o clímax didático do F5. O facilitador pede à turma que tente uma pergunta de **AÇÃO**:
 
@@ -466,7 +598,7 @@ Pontos a reforçar em sala:
 
 ✅ **Checkpoint (AC-4/AC-9):** a turma vê que o chatbot não executa ações; o material não menciona nenhuma "mão"/tool de escrita.
 
-### 10.4 A bolinha atravessa 5 nós (o smoke central do F6)
+### 12.4 A bolinha atravessa 5 nós (o smoke central do F6)
 
 1. Faça uma **compra v2** no portal (login CIAM → comprar um ingresso).
 2. Navegue para **`/flow`**.
@@ -482,7 +614,7 @@ Pontos a reforçar em sala:
 
 4. Abra o **Sheet de inspeção** de cada nó e confira o payload / `correlationId`.
 
-### 10.5 A notificação inline (trade-off dos 5 nós)
+### 12.5 A notificação inline (trade-off dos 5 nós)
 
 No nó **Function Consumer** (nó 3), inspecione o payload e localize a **notificação pós-compra**: ela acontece **inline** (log estruturado correlacionado), **dentro** desse nó — **não tem nó próprio**.
 
@@ -492,25 +624,70 @@ No nó **Function Consumer** (nó 3), inspecione o payload e localize a **notifi
 
 ---
 
+## Fase 13 — Observabilidade nível-produção (~US$0)
+
+A **mesma** telemetria que acende os 5 nós também dá **observabilidade de produção** — de graça, porque **reusa** o **App Insights** `appi-dev-tk-cin-001` **[já existe]** e o **Log Analytics** `log-dev-tk-cin-001` **[já existe]** que estão no ar desde as fases anteriores. **Nada é recriado.** Base: **ADE-010 (§Observabilidade)**.
+
+> 🟢 **[já existe, só usar]:** os recursos `appi`/`log`; o *wiring* no código (Gateway/McpServer/FlowEvents/Functions **já** inicializam telemetria via `APPLICATIONINSIGHTS_CONNECTION_STRING` — **no-op** se ausente); o `X-Correlation-ID` que o gateway injeta e **propaga** Gateway → Function → Service Bus → Consumer; os logs estruturados (`ILogger`, incluindo a notificação pós-compra inline correlacionada); o Kusto que o FlowEvents já faz via MI (`Log Analytics Reader`).
+
+### 13.1 Ligar a telemetria (App Insights via Key Vault) **[configurar à mão]**
+
+1. No Key Vault, crie o secret **`appinsights-connection-string`** com a **Connection String** do App Insights `appi-dev-tk-cin-001` (Overview do recurso). *(O pendente da [Fase 1.4](#14--criar-os-secrets-no-cofre-valor-byte-a-byte).)*
+2. Em **cada** serviço (gateway, McpServer, FlowEvents, Functions), adicione o App Setting `APPLICATIONINSIGHTS_CONNECTION_STRING` como **Key Vault reference** (`appinsights-conn` → o secret acima). *(Container Apps: `secretref`; App Service/Functions: `@Microsoft.KeyVault(...)` + `keyVaultReferenceIdentity`, igual à [Fase 9](#fase-9--migração-sem-downtime-backend--functions-das-quartas--key-vault).)*
+
+### 13.2 Ver o tracing ponta-a-ponta por `correlationId` **[usar]**
+
+No Portal → App Insights `appi-dev-tk-cin-001`:
+- **Transaction search**: busque o `X-Correlation-ID` de uma compra → veja o trace **Gateway → Function → Service Bus → Consumer** ponta-a-ponta (é o "trace end-to-end" já previsto no AC-11 das Quartas, hoje só em runtime por falta da conn string).
+- **Application Map**: topologia viva dos serviços + dependências (SQL, Service Bus, SignalR), com latência/erro por aresta — o "mapa da cidade" da aula.
+
+### 13.3 Workbook da jornada da compra **[criar à mão]**
+
+Crie um **Azure Workbook** no App Insights (US$0) com: **latência por hop** (gateway → function → consumer), **taxa de falha** por serviço, **throughput/backlog do Service Bus**, **saúde do McpServer/gateway** (`/health`, 5xx, cold starts). Base: `requests`/`dependencies`/`traces` correlacionados por `operation_Id` (ligado ao `X-Correlation-ID`).
+
+### 13.4 Alertas úteis a ~US$0 **[criar à mão]**
+
+Azure Monitor → **Alerts → Create alert rule**:
+- **5xx no gateway** acima de N/5min (saúde de perímetro).
+- **Dead-letter no Service Bus** > 0 (compra travada — sinal de negócio).
+- **Latência do chatbot** (dependência do LLM proxy) acima do p95 alvo.
+
+### 13.5 Consulta por Kusto no Portal **[usar]**
+
+Logs do `log-dev-tk-cin-001`:
+```kusto
+requests | where customDimensions.CorrelationId == "<id>" | order by timestamp asc
+traces   | where message has "pós-compra"   // a notificação inline correlacionada
+```
+
+> 🧠 **A amarração da aula (de novo):** a MI que lê o **Log Analytics** (`Log Analytics Reader`, a system-assigned do FlowEvents) é **irmã** da MI que lê o **Key Vault** (`Key Vault Secrets User`, a `id-fifa2026-kv-reader`). Segurança e observabilidade são **a mesma disciplina de identidade gerenciada**, contada duas vezes.
+
+> **[débito residual]** Amostragem/retenção sob controle de custo (o free tier tem **teto de ingestão**); **OpenTelemetry pleno** e a correlação do **frontend** (browser/RUM) ficam **nomeados, não construídos** — o alvo aqui é **US$0/Portal**.
+
+✅ **Checkpoint:** `APPLICATIONINSIGHTS_CONNECTION_STRING` ligado (via cofre) nos serviços; trace por `X-Correlation-ID` visível em **Transaction Search**; **Application Map** povoado; **Workbook** da compra criado; alertas **5xx / dead-letter** ativos.
+
+---
+
 ## Retrospectiva — o que você construiu (e por quê)
 
 | Missão | O que provou |
 |---|---|
 | **Voz** (F5, McpServer) | uma IA pode consultar dados reais com segurança — a regra de ouro vale **por construção** (só 7 sentidos, zero escrita) |
 | **Visão** (F6, Flow Visualizer) | observabilidade distribuída: uma compra rastreável ponta-a-ponta por `correlationId`, animada em 5 nós |
-| **Blindar** (hardening) | o gateway é o guardião único: `X-Gateway-Key` fecha o bypass direto ao McpServer; cache pós-auth; chave Gemini nunca no bundle |
+| **Blindar** (Managed Identity + Key Vault) | as chaves em claro **saíram** para o cofre, lidas por MI; o `X-Gateway-Key` virou **um** secret com igualdade **estrutural**; observabilidade nível-produção a ~US$0 |
 | **Simplificar** (re-arquitetura) | menos peças (notificação inline), menos custo, mesma funcionalidade — retro-compatível com Oitavas/Quartas |
 
 ## Perguntas para fechar (discussão em turma)
 
 - Por que o McpServer tem **ingress interno** e o FlowEvents **externo**? (guardião único vs. serviço de leitura de telemetria consumido pelo front via gateway)
 - Se alguém tentar `curl` direto no McpServer forjando `X-Entra-OID`, o que acontece? (401 — falta o `X-Gateway-Key`)
-- Onde está a chave do Gemini? (no proxy server-side; o front só conhece a URL do proxy)
+- Onde está a chave do Gemini? (no cofre, lida pelo proxy server-side via MI; o front só conhece a URL do proxy)
+- Por que a **User-Assigned compartilhada** para ler o cofre, mas a **system-assigned por-app** para o SQL? (ler segredo é uniforme → 1 grant que sobrevive à recriação; o SQL exige menor-privilégio por-serviço)
 - Por que a notificação pós-compra não tem nó próprio? (trade-off da re-arquitetura: inline no Consumer)
 
 ## Quiz de encerramento
 
-Feche a aula com o **quiz** (Google Forms — link fornecido pelo facilitador na sala): 8 perguntas rápidas sobre o que você construiu — MCP, RAG por tool-use, a regra de ouro por construção, `correlationId`/observabilidade, os 5 nós e a lição de simplificação (por que removemos a orquestração externa). Conteúdo-fonte das perguntas: [`docs/workshops/final/QUIZ.md`](../workshops/final/QUIZ.md).
+Feche a aula com o **quiz** (Google Forms — link fornecido pelo facilitador na sala): 8 perguntas rápidas sobre o que você construiu — MCP, RAG por tool-use, a regra de ouro por construção, Managed Identity + Key Vault, `correlationId`/observabilidade, os 5 nós e a lição de simplificação. Conteúdo-fonte das perguntas: [`docs/workshops/final/QUIZ.md`](../workshops/final/QUIZ.md).
 
 > 🔗 **Link do quiz:** `<informado pelo facilitador>` (o Forms é criado fora do repositório, padrão das Quartas).
 
@@ -520,12 +697,14 @@ Feche a aula com o **quiz** (Google Forms — link fornecido pelo facilitador na
 
 | Camada | Recursos / artefatos |
 |---|---|
-| F5 — Voz | Container App **McpServer** (ingress interno, 7 tools read-only) + chatbot Gemini (chave no proxy server-side) |
-| F5 — Gateway | App Settings `McpServerUrl` + `Gateway__AdminSharedSecret` (X-Gateway-Key no cluster `mcp-server`) |
-| F6 — Visão | Container App **FlowEvents** + **Azure SignalR** (Free/Default) + **Managed Identity** (Log Analytics Reader) |
+| **Blindar — cofre** | User-Assigned MI `id-fifa2026-kv-reader` + secrets no Key Vault `kv-dev-tk-cin-001` (SQL, Gemini, SignalR, `gateway-admin-shared-secret`) + migração in-place (gateway/backend/Functions) sem downtime |
+| F5 — Voz | Container App **McpServer** (ingress interno, 7 tools read-only) + chatbot Gemini (chave no cofre, proxy server-side) |
+| F5 — Gateway | App Settings `McpServerUrl` + `Gateway__AdminSharedSecret` (Key Vault reference; X-Gateway-Key no cluster `mcp-server`) |
+| F6 — Visão | Container App **FlowEvents** + **Azure SignalR** (Free/Default) + **Managed Identity** (Log Analytics Reader + leitura do KV) |
 | F6 — Gateway/Front | App Setting `FlowEventsUrl` + rota `/flow` (`VITE_FLOW_EVENTS_BASE_URL`) |
+| **Observabilidade** | App Insights + Log Analytics reusados: tracing por `correlationId`, Application Map, Workbook da compra, alertas 5xx/dead-letter (~US$0) |
 | Automação | Fork: Variables + Secrets + workflow único **Lab A Final** (`mcp-server`/`gateway`/`flow-events`/`frontend`/`tudo`) |
-| Segurança | McpServer só-leitura por construção · chave Gemini nunca no bundle · X-Gateway-Key fecha o bypass · cache pós-auth |
+| Segurança | McpServer só-leitura por construção · chave Gemini nunca no bundle · segredos no Key Vault (MI) · X-Gateway-Key com igualdade estrutural · cache pós-auth |
 
 ---
 
@@ -543,24 +722,49 @@ Feche a aula com o **quiz** (Google Forms — link fornecido pelo facilitador na
 | Sintoma | Causa provável | Mitigação |
 |---|---|---|
 | `tools/list` retorna **8** (não 7) | branch não parte do estado pós-Story 3.1 (McpServer só-sentidos) | confirme que `lab-a-final` está baseada em pós-3.1; deve haver **7** `[McpServerTool(..., ReadOnly = true)]` |
-| **401** no `POST /mcp` mesmo com Bearer válido | `Gateway__AdminSharedSecret` (gateway) ≠ `GATEWAY_SHARED_SECRET` (McpServer), ou gateway não rebuildado | use o **mesmo** segredo nos dois e rode `acao=gateway` (o `mcp-server` só entrou no conjunto confiável no hardening) |
-| **502** em `/mcp` | `McpServerUrl` ausente/errado no gateway, ou target port do McpServer ≠ 8080 | `McpServerUrl = https://<mcp-fqdn>` (Fase 3); ingress target port = **8080** |
-| McpServer responde por **URL pública** | ingress criado como **External** (deveria ser interno) | recriar/ajustar ingress = **Limited to Container Apps Environment** (Fase 1.1) |
+| **401** no `POST /mcp` mesmo com Bearer válido | `Gateway__AdminSharedSecret` ≠ `GATEWAY_SHARED_SECRET`, ou gateway não rebuildado | como os dois agora referenciam o **mesmo** secret do cofre (`gateway-admin-shared-secret`), confirme que **ambas as revisões** (gateway e McpServer) subiram **Healthy** e rode `acao=gateway` |
+| **502** em `/mcp` | `McpServerUrl` ausente/errado no gateway, ou target port do McpServer ≠ 8080 | `McpServerUrl = https://<mcp-fqdn>` (Fase 4); ingress target port = **8080** |
+| McpServer responde por **URL pública** | ingress criado como **External** (deveria ser interno) | recriar/ajustar ingress = **Limited to Container Apps Environment** (Fase 2.1) |
+| App Setting mostra a **string literal** `@Microsoft.KeyVault(...)` | reference não resolveu (backend/Functions sem `keyVaultReferenceIdentity`, ou MI sem role) | setar `keyVaultReferenceIdentity` (Fase 9.1) + `Key Vault Secrets User` na MI (Fase 1.3); exigir status **Resolved** |
+| Secret do Container App não vira **Key Vault reference** | MI não anexada antes (landmine P-4), ou role não propagada | anexar `id-fifa2026-kv-reader` **antes** (Fase 3.2); aguardar a propagação do IAM |
 | Chatbot diz "chat indisponível" | `VITE_LLM_PROXY_URL` não setado no build | definir a Variable (= gateway) e re-rodar `acao=frontend` |
 | Chatbot **inventa** uma resposta de ação | alucinação de texto do LLM (function calling não é 100% infalível) | reforçar: a "promessa" no texto **não** é uma tool call; nenhuma escrita ocorre — não há tool de escrita |
 | `POST /mcp` retorna `X-Cache: HIT` | regressão do fix de cache do gateway | confirmar que a branch inclui o fix (POST não é cacheado) |
 | Build do frontend falha no **guard de key** | uma key de LLM apareceu no bundle | a key deve ficar **só** no proxy server-side; remover qualquer uso direto no front |
-| Chatbot responde mas sem dados reais | `SqlConnectionString` ausente/errada no McpServer | conferir o App Setting (Fase 2.2) |
+| Chatbot responde mas sem dados reais | `SqlConnectionString` ausente/errada no McpServer | conferir o App Setting (Fase 3); se KV-backed, a **revisão do McpServer provisiona Healthy** (Container App não tem badge "Resolved" — a falha aparece como revisão que não sobe) |
 
 ## Apêndice D — Troubleshooting F6 (FlowEvents + Flow Visualizer)
 
 | Sintoma | Causa provável | Mitigação |
 |---|---|---|
 | Diagrama mostra **6 nós** ou falta o "Gateway YARP" | branch não parte do estado pós-Story 3.1 (5 nós) | confirmar `flowNodes.ts` com **5** entradas; reconstruir `lab-a-final` do commit correto |
-| Nós **nunca acendem** / erro 403 nos traces | Managed Identity sem **Log Analytics Reader** | conceder o papel à MI do `ca-flow-<sufixo>` no workspace (Fase 6.2) |
+| Nós **nunca acendem** / erro 403 nos traces | Managed Identity **system-assigned** sem **Log Analytics Reader** | conceder o papel à system-assigned do `ca-flow-<sufixo>` no workspace (Fase 7.3) |
 | Bolinha **para no nó 2** (Service Bus) | Consumer com backlog ou atraso de ingestão do Kusto (segundos) | aguardar; confirmar Function Consumer rodando |
 | `correlationId` não aparece em nenhum nó | SignalR desconectado ou `VITE_FLOW_EVENTS_BASE_URL` incorreto | conferir a Variable (= `{gateway}/flow-events`) e a rota `/flow` conectando ao Hub |
-| SignalR não conecta (WebSocket) | ingress do FlowEvents sem transport **Auto**, ou CORS sem o origin do front | ingress transport = **Auto** (Fase 5); CORS do SignalR + `FrontendOrigin` com o origin exato |
-| **502** em `/flow-events/**` | `FlowEventsUrl` ausente no gateway | definir `FlowEventsUrl = https://<flow-fqdn>` (Fase 7) |
-| SignalR recusa por tier | recurso criado em modo **Serverless** | recriar SignalR em **Service Mode Default** (Fase 4) |
-| Aluno procura um **nó de notificação** dedicado | trade-off aceito (5 nós, notificação inline no Consumer) | reforçar didaticamente (Fase 10.5): a notificação está **dentro** do nó Function Consumer |
+| SignalR não conecta (WebSocket) | ingress do FlowEvents sem transport **Auto**, ou CORS sem o origin do front | ingress transport = **Auto** (Fase 6); CORS do SignalR + `FrontendOrigin` com o origin exato |
+| **502** em `/flow-events/**` | `FlowEventsUrl` ausente no gateway | definir `FlowEventsUrl = https://<flow-fqdn>` (Fase 8) |
+| SignalR recusa por tier | recurso criado em modo **Serverless** | recriar SignalR em **Service Mode Default** (Fase 5) |
+| `AzureSignalRConnectionString` não resolve | secret KV-backed sem a MI anexada / role não propagada | anexar `id-fifa2026-kv-reader` ao FlowEvents (Fase 7.2) + aguardar IAM |
+| Aluno procura um **nó de notificação** dedicado | trade-off aceito (5 nós, notificação inline no Consumer) | reforçar didaticamente (Fase 12.5): a notificação está **dentro** do nó Function Consumer |
+
+## Apêndice E — SQL via Managed Identity (showcase/opcional)
+
+> **"Próximo nível" — NÃO está no caminho crítico do lab.** A [Fase 1](#fase-1--cofre-e-identidade-managed-identity--key-vault) já tira a **senha do SQL do texto puro** (ela vai para o cofre). Este apêndice **elimina a senha** — mas exige mais cerimônia e risco, e o **backend v1 segue com senha por retro-compat**. Faça só se sobrar tempo/ambiente. Base: **ADE-010 D5**.
+
+**O código já suporta** — é troca de **string**, não de mecanismo: `PurchaseRepository.cs` e `FifaQueryRepository.cs` ficam **intactos**; o `Microsoft.Data.SqlClient` resolve o token AAD **nativamente** pela keyword `Authentication=`.
+
+**O que muda:** o **valor** do secret `sql-connection-string` no cofre, de `Server=...;User Id=...;Password=...` para:
+```
+Server=tcp:sql-dev-tk-cin-001.database.windows.net,1433;Database=FIFA2026Tickets;Authentication=Active Directory Managed Identity;Encrypt=True
+```
+*(Se a MI for User-Assigned, acrescentar `;User Id=<client-id-da-MI>`.)* O **nome** do secret e as referências **não mudam** — só o valor.
+
+**Pré-requisitos (sem eles o SQL-MI FALHA):**
+1. **Azure AD admin no SQL Server** `sql-dev-tk-cin-001` (Portal → SQL Server → **Microsoft Entra ID → Set admin**).
+2. Rodar `phase-08-contained-users.sql` **conectado COMO esse admin via AAD** (não SQL-auth), no banco `FIFA2026Tickets`, com os placeholders `<mi-*>` substituídos pelos **nomes reais** das MIs (@data-engineer/@devops).
+3. As MIs **system-assigned** dos apps (McpServer, Functions) já habilitadas.
+
+> ⚠️ **Menor-privilégio (não use a UA compartilhada no SQL):** cada app usa a **própria system-assigned** → o próprio *contained user* → o próprio papel (McpServer `db_datareader`-**only** vs Functions writer+reader — ADE-008). Uma MI única colapsaria os dois no **mesmo** user e **quebraria a regra de ouro**.
+> `[confirmar no Portal — R-6]` quando um app tem **system E user-assigned**, a string `Authentication=Active Directory Managed Identity` **sem** `User Id` pode resolver a identidade **errada**; se ambíguo, usar `User Id=<client-id>` **explícito**.
+
+**Smoke de menor-privilégio:** um `INSERT` via a MID do **McpServer** deve tomar **permissão negada** (ele é `db_datareader`-only).

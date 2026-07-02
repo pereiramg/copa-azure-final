@@ -7,10 +7,10 @@
 
 | # | Documento | Onde está | O que é |
 |---|-----------|-----------|---------|
-| 1 | **Deck de slides** | [`slides.md`](./slides.md) | Apresentação enxuta (reveal.js) — só as tecnologias novas: MCP · RAG (tool-use) · Managed Identity (+KV direção) · observabilidade/SignalR |
-| 2 | **Storyboard do PPT** | [`STORYBOARD-APRESENTACAO.md`](./STORYBOARD-APRESENTACAO.md) | Spec de 12 slides para gerar o `.pptx` (fora do repo, padrão Oitavas/Quartas) |
-| 3 | **Speaker notes** | [`SPEAKER-NOTES.md`](./SPEAKER-NOTES.md) | Roteiro falado da aula, fase a fase |
-| 4 | **Guia do aluno (portal)** | [`../../runbooks/final-portal-guide.md`](../../runbooks/final-portal-guide.md) | Passo a passo completo do aluno — 9 fases + Bloco 3 (fork novo → PR → `acao`s) |
+| 1 | **Deck de slides** | [`slides.md`](./slides.md) | Apresentação enxuta (reveal.js) — só as tecnologias novas: MCP · RAG (tool-use) · Managed Identity + Key Vault (entrega Blindar) · observabilidade/SignalR |
+| 2 | **Storyboard do PPT** | [`STORYBOARD-APRESENTACAO.md`](./STORYBOARD-APRESENTACAO.md) | Prompt de 11 slides (DNA das Quartas) para gerar o `.pptx` no Claude for PowerPoint (fora do repo) |
+| 3 | **Speaker notes** | [`SPEAKER-NOTES.md`](./SPEAKER-NOTES.md) | Roteiro falado da aula, slide a slide |
+| 4 | **Guia do aluno (portal)** | [`../../runbooks/final-portal-guide.md`](../../runbooks/final-portal-guide.md) | Passo a passo completo — 14 fases (0–13): Gemini → cofre (Managed Identity + Key Vault) → F5/F6 → migração sem downtime dos recursos das Quartas → fork/PR/`acao`s → smokes → observabilidade; + Apêndices A–E (inclui SQL via MI, showcase) |
 | 5 | **Quiz** | [`QUIZ.md`](./QUIZ.md) | 8 perguntas-fonte para montar o Google Forms (link entra no guia via placeholder) |
 | 6 | **Diagrama de arquitetura** | [`../../diagrams/final-f5-f6-mcp-flow.drawio`](../../diagrams/final-f5-f6-mcp-flow.drawio) | Arquitetura pós-ADE-008 (5 nós, McpServer interno 7 tools read-only, zero n8n) — abrir no diagrams.net |
 | 7 | **Workflow do lab** | [`../../../.github/workflows/lab-a-final.yml`](../../../.github/workflows/lab-a-final.yml) | Workflow único: `acao = mcp-server \| gateway \| flow-events \| frontend \| tudo` |
