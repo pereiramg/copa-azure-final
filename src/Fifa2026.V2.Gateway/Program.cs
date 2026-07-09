@@ -37,10 +37,21 @@ const string EntraOidHeader = "X-Entra-OID";            // Story 2.3 AC-7 / ADE-
 // injetados, NUNCA logados (Inv 8 flag (c)). A Function os usa só no arm de INSERT (nato-CIAM).
 const string EntraEmailHeader = "X-Entra-Email";
 const string EntraNameHeader = "X-Entra-Name";
+// Story 3.5 fix (A-1 re-layer) — flag de verificação do email, derivado do claim
+// email_verified. Propagado SEMPRE junto do email; a MeFunction usa: LINK exige "true"
+// (anti-takeover), INSERT nato-CIAM não. Anti-spoof (Remove) igual aos outros headers.
+const string EntraEmailVerifiedHeader = "X-Entra-Email-Verified";
 // M-1 (code review 2026-07-01) — RouteId (appsettings.json → ReverseProxy:Routes) do ÚNICO
 // consumidor de email/name: o GET /api/v2/me. A injeção dessa PII é ESCOPADA a esta rota
 // (minimização de PII), diferente do X-Entra-OID (global — contrato existente da Story 2.3).
 const string MeRouteId = "me-get";
+// EPIC-004 Story 4.6 §Emenda MEDIUM-4 (ADE-009 v1.1) — RouteId e header da exceção
+// ROUTE-SCOPED do FlowEvents /api/flow/diploma-summary. O X-Diploma-Key reusa o MESMO valor
+// do Gateway:AdminSharedSecret sob header DISTINTO, injetado SÓ nesta rota (não por cluster —
+// o cluster flow-events segue fora do X-Gateway-Key). Prova de proveniência que o FQDN direto
+// do ca-flow não tem; somada ao Bearer (blanket RequireAuthorization) fecha o buraco MEDIUM-4.
+const string DiplomaRouteId = "flow-events-diploma";
+const string DiplomaKeyHeader = "X-Diploma-Key";
 
 // Claim names do Microsoft Identity Platform (AC-14 anti-hallucination — validados
 // contra docs oficiais "id-token-claims-reference" / "access-token-claims-reference").
@@ -155,6 +166,13 @@ builder.Services
             transformContext.ProxyRequest.Headers.Remove(EntraOidHeader);
             transformContext.ProxyRequest.Headers.Remove(EntraEmailHeader);
             transformContext.ProxyRequest.Headers.Remove(EntraNameHeader);
+            transformContext.ProxyRequest.Headers.Remove(EntraEmailVerifiedHeader);
+            // Emenda MEDIUM-4 (defesa em profundidade) — strip GLOBAL do X-Diploma-Key também:
+            // o cliente NUNCA pode forjá-lo em NENHUMA rota. A rota flow-events-diploma reinjeta o
+            // valor real logo depois (este transform roda antes, na ordem de registro). Não é
+            // explorável hoje (só a rota diploma valida o header), mas fecha o gap por consistência
+            // com os headers de identidade acima.
+            transformContext.ProxyRequest.Headers.Remove(DiplomaKeyHeader);
 
             var user = transformContext.HttpContext.User;
             if (user?.Identity?.IsAuthenticated == true)
@@ -200,22 +218,25 @@ builder.Services
                 var user = transformContext.HttpContext.User;
                 if (user?.Identity?.IsAuthenticated == true)
                 {
-                    // A-1 (code review 2026-07-01) — o email do LINK vem SÓ do claim `email` e
-                    // SOMENTE quando `email_verified` for verdadeiro (aceita o bool true ou a
-                    // string "true"; bool.TryParse cobre ambos — o claim booleano do JWT chega
-                    // ao ClaimsPrincipal como string). Sem verificação → header OMITIDO → a
-                    // MeFunction cai em 422 (InsufficientClaims) = fail-closed. Isso fecha o
-                    // account-takeover: um oid que só REGISTROU o email de uma vítima (sem provar
-                    // posse) não dispara o arm de LINK por email. preferred_username foi removido
-                    // da cadeia (mutável; "must not be used for authorization").
+                    // A-1 (code review 2026-07-01) + Story 3.5 fix (re-layer) — o email é
+                    // propagado SEMPRE, junto de um header X-Entra-Email-Verified derivado do
+                    // claim `email_verified` (aceita o bool true ou a string "true"; bool.TryParse
+                    // cobre ambos — o claim booleano do JWT chega ao ClaimsPrincipal como string).
+                    // A decisão de segurança migra para a MeFunction (defense-in-depth): o arm de
+                    // LINK (vincular a uma conta v1 EXISTENTE) exige verified=true — fecha o
+                    // account-takeover em que um oid que só REGISTROU o email de uma vítima (sem
+                    // provar posse) sequestraria a conta. O arm de INSERT (nato-CIAM genuíno) NÃO
+                    // exige verified: não há conta a sequestrar, e colisão de email vira 409 na
+                    // UQ_users_email. preferred_username segue removido (mutável; "must not be
+                    // used for authorization").
                     var emailVerified = bool.TryParse(
                         user.FindFirst(EmailVerifiedClaim)?.Value, out var verified) && verified;
-                    var email = emailVerified
-                        ? user.FindFirst(EmailClaim)?.Value ?? user.FindFirst(EmailClaimUri)?.Value
-                        : null;
+                    var email = user.FindFirst(EmailClaim)?.Value ?? user.FindFirst(EmailClaimUri)?.Value;
                     if (!string.IsNullOrWhiteSpace(email))
                     {
                         transformContext.ProxyRequest.Headers.TryAddWithoutValidation(EntraEmailHeader, email);
+                        transformContext.ProxyRequest.Headers.TryAddWithoutValidation(
+                            EntraEmailVerifiedHeader, emailVerified ? "true" : "false");
                     }
 
                     // O NOME não é usado para autorização — só popula a coluna `name` NOT NULL no
@@ -230,6 +251,40 @@ builder.Services
                 }
 
                 // PII (email/name): injetada, NUNCA logada (Inv 8 flag (c)).
+                return ValueTask.CompletedTask;
+            });
+        }
+
+        // -----------------------------------------------------------------------------
+        // EPIC-004 Story 4.6 §Emenda MEDIUM-4 (ADE-009 v1.1) — injeção ROUTE-SCOPED do
+        // X-Diploma-Key SÓ na rota flow-events-diploma (GET /flow-events/api/flow/diploma-summary).
+        //
+        // Escopamos por ROTA (molde do me-get acima), NÃO por cluster: o cluster flow-events
+        // continua FORA do X-Gateway-Key (o teste FlowEvents_Cluster_Does_NOT_Receive_GatewayKey
+        // segue verde — header e mecanismo distintos; a injeção é por rota, não por cluster).
+        // É a "prova de proveniência" que um chamador no FQDN direto do ca-flow não tem; combinada
+        // com o Bearer exigido pelo blanket RequireAuthorization (barra o anônimo-via-gateway),
+        // fecha o buraco do MEDIUM-4. Reusa o MESMO segredo (adminSharedSecret) sob header
+        // distinto — US$0 — com a MESMA semântica fail-closed/legado da Inv 1 (segredo vazio =
+        // injeção desligada = bypass legado no destino, preservando dev local/pré-provisionamento).
+        // -----------------------------------------------------------------------------
+        if (transformBuilderContext.Route?.RouteId is { } diplomaRouteId &&
+            string.Equals(diplomaRouteId, DiplomaRouteId, StringComparison.OrdinalIgnoreCase))
+        {
+            transformBuilderContext.AddRequestTransform(transformContext =>
+            {
+                // Anti-spoofing (igual ao X-Gateway-Key/X-Entra-OID): SEMPRE descarta qualquer
+                // X-Diploma-Key vindo do cliente antes de injetar o valor real.
+                transformContext.ProxyRequest.Headers.Remove(DiplomaKeyHeader);
+
+                // Só injeta quando o segredo está configurado (vazio = injeção desligada, o
+                // FlowEvents cai no bypass legado — paridade com a semântica da l.254).
+                if (!string.IsNullOrEmpty(adminSharedSecret))
+                {
+                    transformContext.ProxyRequest.Headers.TryAddWithoutValidation(
+                        DiplomaKeyHeader, adminSharedSecret);
+                }
+
                 return ValueTask.CompletedTask;
             });
         }
